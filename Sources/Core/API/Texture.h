@@ -37,6 +37,10 @@ struct TextureSubresourceDesc {
     int height;
     int depth;
 
+    int xOffset;
+    int yOffset;
+    int zOffset;
+
     int format;
     int type;
     const void* pData;
@@ -48,7 +52,11 @@ class RASTERY_API Texture {
     Texture(const TextureDesc& desc,
             const TextureSubresourceDesc* pInitData = nullptr);
 
+    void uploadData(const TextureSubresourceDesc& subresourceDesc) const;
+
     void generateMipMap() const;
+
+    [[nodiscard]] uint32_t getId() const { return mId; }
 
    private:
     TextureDesc mDesc;

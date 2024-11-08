@@ -3,9 +3,11 @@ add_executable(Rastery
     Core/API/Shader.cpp
 
     Core/App.cpp
+    Core/Error.cpp
     Core/Rastery.cpp
     Core/Window.cpp
 
+    Utils/Image.cpp
     Utils/Logger.cpp
 )
 
@@ -23,15 +25,21 @@ target_sources(Rastery
 
     # glad
     ../External/glad/glad.c
+
+    # lodepng
+    ../External/lodepng/lodepng.cpp
+    
+    # tinyexr
+    ../External/tinyexr/miniz.c
 )
 
 # C++ Standard version
-target_compile_features(Rastery PUBLIC cxx_std_23)
+target_compile_features(Rastery PUBLIC cxx_std_20)
 set_target_properties(Rastery PROPERTIES CXX_EXTENSIONS OFF)
 
 # Compile options
 target_compile_options(Rastery PRIVATE
-    $<$<CXX_COMPILER_ID:MSVC>:/W4 /WX>
+    $<$<CXX_COMPILER_ID:MSVC>:/W4>
     $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic>
 )
 
@@ -40,6 +48,12 @@ target_include_directories(Rastery
     ${CMAKE_CURRENT_SOURCE_DIR}
     ../External/imgui
     ../External/glad
+    ../External/lodepng
+    ../External/tinyexr
+)
+target_compile_definitions(Rastery
+    PRIVATE
+    RASTERY_STATIC_LINK=1
 )
 
 target_link_libraries(Rastery

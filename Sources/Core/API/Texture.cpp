@@ -40,6 +40,7 @@ Texture::Texture(const TextureDesc& desc,
                     toGraphicsEnum(desc.filterDesc.minFilter));
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
                     toGraphicsEnum(desc.filterDesc.magFilter));
+    RASTERY_CHECK_GL_ERROR();
 
     if (pInitData) {
         glTexImage2D(GL_TEXTURE_2D, desc.layers, desc.format, desc.width,
@@ -47,8 +48,17 @@ Texture::Texture(const TextureDesc& desc,
                      pInitData->pData);
     } else {
         glTexImage2D(GL_TEXTURE_2D, desc.layers, desc.format, desc.width,
-                     desc.height, 0, 0, 0, nullptr);
+                     desc.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     }
+    RASTERY_CHECK_GL_ERROR();
+}
+
+void Texture::uploadData(const TextureSubresourceDesc& subresourceDesc) const {
+    glBindTexture(GL_TEXTURE_2D, mId);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, subresourceDesc.xOffset,
+                    subresourceDesc.yOffset, subresourceDesc.width,
+                    subresourceDesc.height, subresourceDesc.format,
+                    subresourceDesc.type, subresourceDesc.pData);
 }
 
 void Texture::generateMipMap() const {

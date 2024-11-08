@@ -1,14 +1,13 @@
 #include "Window.h"
 
-#include "imgui_impl_glfw.h"
-
-#define GLFW_INCLUDE_NONE
-#include <GLFW/glfw3.h>
 #include <glad.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 
+#include "GlfwInclude.h"
 #include "Utils/Logger.h"
+#include "imgui_impl_glfw.h"
+
 
 namespace Rastery {
 class ApiCallbacks {

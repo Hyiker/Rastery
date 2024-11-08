@@ -4,13 +4,15 @@
 
 #include <algorithm>
 
+#include "Core/Error.h"
 #include "Utils/Logger.h"
+
 namespace Rastery {
 
 static void checkCompileErrors(uint32_t shader, bool isProgram) {
     int success;
     char infoLog[1024];
-    if (isProgram) {
+    if (!isProgram) {
         glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
         if (!success) {
             glGetShaderInfoLog(shader, 1024, nullptr, infoLog);
@@ -45,19 +47,41 @@ static int mapShaderStage(ShaderStage stage) {
     logFatal("Unknown stage {}", int(stage));
 }
 
+UniformProxy::UniformProxy(int location) : mLocation(location) {}
+
+void UniformProxy::setImpl(const Texture& t) const {
+    glActiveTexture(GL_TEXTURE0 + 0);
+    glBindTexture(GL_TEXTURE_2D, t.getId());
+    glUniform1i(mLocation, 0);
+}
+
+ShaderVars::ShaderVars(uint32_t programId) : mProgramId(programId) {}
+
+UniformProxy ShaderVars::operator[](const std::string& key) const {
+    int location = glGetUniformLocation(mProgramId, key.c_str());
+    return UniformProxy(location);
+}
+
+void ShaderProgram::use() const { glUseProgram(id); }
+
+ShaderProgram::~ShaderProgram() { glDeleteProgram(id); }
+
+ShaderVars ShaderProgram::getRootVars() const { return ShaderVars(id); }
+
 ShaderProgram::SharedPtr createShaderProgram(
-    const std::vector<std::pair<ShaderStage, std::string>> descs) {
+    const std::vector<std::pair<ShaderStage, std::string>>& descs) {
     ShaderProgram::SharedPtr pShaderProgram = std::make_shared<ShaderProgram>();
     uint32_t program = glCreateProgram();
 
     std::vector<uint32_t> shaders;
     for (const auto& desc : descs) {
-        unsigned int shader = glCreateShader(GL_VERTEX_SHADER);
+        unsigned int shader = glCreateShader(mapShaderStage(desc.first));
 
-        const char* src = desc.second.c_str();
-        glShaderSource(shader, 1, (const GLchar* const*)src, nullptr);
+        const auto* src = desc.second.c_str();
+        glShaderSource(shader, 1, &src, nullptr);
         glCompileShader(shader);
         checkCompileErrors(shader, false);
+        RASTERY_CHECK_GL_ERROR();
 
         glAttachShader(program, shader);
         shaders.push_back(shader);
@@ -66,11 +90,12 @@ ShaderProgram::SharedPtr createShaderProgram(
     glLinkProgram(program);
     checkCompileErrors(program, true);
 
+    RASTERY_CHECK_GL_ERROR();
     for (uint32_t shader : shaders) {
         glDeleteShader(shader);
     }
     pShaderProgram->id = program;
-    
+
     return pShaderProgram;
 }
 }  // namespace Rastery

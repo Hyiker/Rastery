@@ -28,13 +28,17 @@
 #define RASTERY_API
 #endif
 
+#ifndef RASTERY_STATIC_LINK
 #ifdef RASTERY_MODULE
 #define RASTERY_API RASTERY_API_EXPORT
 #else
 #define RASTERY_API RASTERY_API_IMPORT
 #endif
+#else
+#define RASTERY_API
+#endif
 
-#if defined(RASTERY_MSVC) // MSVC
+#if defined(RASTERY_MSVC)  // MSVC
 #define FORCE_INLINE __forceinline
 #elif defined(RASTERY_GCC) || defined(RASTERY_CLANG)
 #define FORCE_INLINE inline __attribute__((always_inline))

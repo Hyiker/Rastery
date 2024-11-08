@@ -10,12 +10,14 @@ class RASTERY_API App : public ICallback {
 
     void renderUI();
     void handleRenderFrame() override;
-    void handleKeyEvent(int key, int action, int mods) override {}
+    void handleKeyEvent(int key, int action, int mods) override;
 
     ~App();
 
    private:
     void beginFrame();
+
+    uint32_t mVao;
 
     Texture::SharedPtr mpPresentTexture;
     ShaderProgram::SharedPtr mpPresentShader;
