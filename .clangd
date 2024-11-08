@@ -1,0 +1,30 @@
+CompileFlags:
+  Remove:
+    - "-std=c++23"
+  Add:
+    - "-std=c++2b"
+Diagnostics:
+  ClangTidy:
+    Add: [
+        performance-*,
+        bugprone-*,
+        portability-*,
+        modernize-*,
+        # cppcoreguidelines-*,
+      ]
+    Remove:
+      [
+        readability-*,
+        modernize-use-trailing-return-type,
+        bugprone-unhandled-exception-at-new,
+        bugprone-easily-swappable-parameters,
+        readability-isolate-declaration,
+        modernize-return-braced-init-list,
+      ]
+  UnusedIncludes: Strict
+InlayHints:
+  # BlockEnd: No
+  Designators: Yes
+  Enabled: Yes
+  ParameterNames: Yes
+  DeducedTypes: Yes
