@@ -8,11 +8,15 @@
 #include <string>
 
 #include "API/Shader.h"
+#include "Camera.h"
 #include "Core/API/Shader.h"
 #include "Core/API/Texture.h"
+#include "Core/API/Vao.h"
+#include "Core/Math.h"
 #include "Core/Window.h"
 #include "Error.h"
 #include "GlfwInclude.h"
+#include "Raster/RasterPipeline.h"
 #include "Utils/Image.h"
 #include "Utils/Logger.h"
 #include "fmt/format.h"
@@ -36,7 +40,7 @@ out vec4 FragColor;
 in vec2 TexCoord;
 uniform sampler2D texture1;
 void main() {
-    FragColor = texture(texture1, TexCoord);
+    FragColor = texture(texture1, vec2(TexCoord.x, 1.0 - TexCoord.y));
 }
 )";
 }  // namespace
@@ -46,26 +50,12 @@ namespace Rastery {
 App::App() {
     Logger::init();
 
-    WindowDesc desc{.width = 800, .height = 600, .title = "RasteryApp"};
+    WindowDesc desc{.width = 800, .height = 600, .title = "RasteryApp", .enableVSync = false};
     mpWindow = std::make_shared<Window>(desc, this);
     RASTERY_CHECK_GL_ERROR();
 
-    mpPresentShader =
-        createShaderProgram({{ShaderStage::Vertex, kVertexShaderSource},
-                             {ShaderStage::Fragment, kFragmentShaderSource}});
+    mpPresentShader = createShaderProgram({{ShaderStage::Vertex, kVertexShaderSource}, {ShaderStage::Fragment, kFragmentShaderSource}});
     RASTERY_CHECK_GL_ERROR();
-
-    {
-        TextureDesc textureDesc{.type = GL_TEXTURE_2D,
-                                .format = GL_RGBA8,
-                                .width = (int)desc.width,
-                                .height = (int)desc.height,
-                                .depth = 0,
-                                .layers = 0,
-                                .wrapDesc = TextureWrapDesc(),
-                                .filterDesc = TextureFilterDesc()};
-        mpPresentTexture = std::make_shared<Texture>(textureDesc);
-    }
 
     {
         float vertices[] = {
@@ -76,8 +66,8 @@ App::App() {
             -1.0f, 1.0f,  0.0f, 0.0f, 1.0f   // 左上角
         };
         unsigned int indices[] = {
-            0, 1, 3,  // 第一个三角形
-            1, 2, 3   // 第二个三角形
+            0, 1, 3,
+            1, 2, 3
         };
         unsigned int VBO, EBO;
         glGenVertexArrays(1, &mVao);
@@ -87,56 +77,136 @@ App::App() {
         glBindVertexArray(mVao);
 
         glBindBuffer(GL_ARRAY_BUFFER, VBO);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices,
-                     GL_STATIC_DRAW);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
 
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices,
-                     GL_STATIC_DRAW);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
 
-        // 位置属性
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float),
-                              (void*)0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
         glEnableVertexAttribArray(0);
 
-        // 纹理坐标属性
-        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float),
-                              (void*)(3 * sizeof(float)));
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
         glEnableVertexAttribArray(1);
+        RASTERY_CHECK_GL_ERROR();
     }
 
-    RASTERY_CHECK_GL_ERROR();
+    // Create scene data
+    mpCamera = std::make_shared<Camera>();
+
+    handleFrameBufferResize(desc.width, desc.height);
+
     mpWindow->beginLoop();
 }
 
-std::vector<unsigned char> d(800 * 600 * 4, 128);
-TextureSubresourceDesc subresourceDesc{
-    .width = 800,
-    .height = 600,
-    .depth = 0,
-    .xOffset = 0,
-    .yOffset = 0,
-    .zOffset = 0,
-    .format = GL_RGBA,
-    .type = GL_UNSIGNED_BYTE,
-    .pData = d.data(),
-};
+void App::handleFrameBufferResize(int width, int height) {
+    // Resize present texture
+    {
+        TextureDesc textureDesc{.type = GL_TEXTURE_2D,
+                                .format = TextureFormat::Rgba8,
+                                .width = (int)width,
+                                .height = (int)height,
+                                .depth = 0,
+                                .layers = 0,
+                                .wrapDesc = TextureWrapDesc(),
+                                .filterDesc = TextureFilterDesc()};
+
+        mpPresentTexture = std::make_shared<Texture>(textureDesc);
+    }
+
+    if (mpCamera) {
+        mpCamera->setAspectRatio(float(width) / height);
+    }
+
+    // Recreate rasterization pipeline
+    {
+        TextureDesc depthDesc{.type = GL_TEXTURE_2D,
+                              .format = TextureFormat::Rgba32F,
+                              .width = (int)width,
+                              .height = (int)height,
+                              .depth = 0,
+                              .layers = 0,
+                              .wrapDesc = TextureWrapDesc(),
+                              .filterDesc = TextureFilterDesc()};
+
+        auto pDepthTexture = std::make_shared<CpuTexture>(depthDesc);
+
+        TextureDesc colorDesc{.type = GL_TEXTURE_2D,
+                              .format = TextureFormat::Rgba32F,
+                              .width = (int)width,
+                              .height = (int)height,
+                              .depth = 0,
+                              .layers = 0,
+                              .wrapDesc = TextureWrapDesc(),
+                              .filterDesc = TextureFilterDesc()};
+
+        auto pColorTexture = std::make_shared<CpuTexture>(colorDesc);
+
+        mRasterizer.mpColorTexture = pColorTexture;
+        mRasterizer.mpDepthTexture = pDepthTexture;
+
+        RasterDesc rasterDesc;
+        rasterDesc.width = width;
+        rasterDesc.height = height;
+        mRasterizer.mpPipeline = std::make_shared<RasterPipeline>(rasterDesc, pDepthTexture, pColorTexture);
+    }
+}
+
 void App::handleRenderFrame() {
     beginFrame();
 
+    executeRasterizer();
+
+    blitFrameBuffer();
+
+    renderUI();
+}
+
+void App::executeRasterizer() const {
+    CpuVao vao;
+    vao.indexData = {};
+    Vertex v0, v1, v2;
+    v0.position = float3(0, 0.3, 0);
+    v1.position = float3(-0.5, -0.3, 0);
+    v2.position = float3(0.5, -0.3, 0);
+    vao.vertexData = {v0, v1, v2};
+
+    CameraData data = mpCamera->getData();
+
+    auto modelMatrix = float4x4(1.f);
+    auto normalMatrix = transpose(inverse(data.viewMat * modelMatrix));
+
+    auto vertexShader = [&](Vertex v) {
+        VertexOut out;
+        out.position = data.projViewMat * modelMatrix * float4(v.position, 1.f);
+        out.normal = float3(normalMatrix * float4(v.normal, 0.f));
+        out.texCoord = v.texCoord;
+        return out;
+    };
+
+    auto fragmentShader = [&]() { return float4(1.f, 0.f, 0.f, 0.f); };
+
+    mRasterizer.mpPipeline->execute(vao, vertexShader, fragmentShader);
+}
+
+void App::blitFrameBuffer() const {
+    // Upload texture data
+    {
+        const auto& desc = mRasterizer.mpColorTexture->getDesc();
+        TextureSubresourceDesc subDesc{};
+
+        subDesc.width = desc.width;
+        subDesc.height = desc.height;
+        subDesc.format = desc.format;
+        subDesc.pData = mRasterizer.mpColorTexture->getPtr();
+        mpPresentTexture->uploadData(subDesc);
+    }
+
     glBindVertexArray(mVao);
-
-    mpPresentTexture->uploadData(subresourceDesc);
-
     mpPresentShader->use();
     ShaderVars var = mpPresentShader->getRootVars();
     var["texture1"] = mpPresentTexture;
-
-    RASTERY_CHECK_GL_ERROR();
-
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr);
-
-    renderUI();
+    RASTERY_CHECK_GL_ERROR();
 }
 
 void App::handleKeyEvent(int key, int action, int mods) {
@@ -152,8 +222,7 @@ void App::renderUI() {
 
     auto& io = ImGui::GetIO();
     ImGui::Begin("Status");
-    ImGui::Text("%d fps, %.2f ms", int(1.f / io.DeltaTime),
-                io.DeltaTime * 1000.f);
+    ImGui::Text("%d fps, %.2f ms", int(1.f / io.DeltaTime), io.DeltaTime * 1000.f);
 
     ImGui::End();
 
@@ -164,6 +233,10 @@ void App::renderUI() {
 void App::beginFrame() {
     glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
+
+    if (mpCamera) {
+        mpCamera->computeCameraData();
+    }
 }
 
 App::~App() {

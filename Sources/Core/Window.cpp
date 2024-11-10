@@ -4,16 +4,15 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 
+#include "GLFW/glfw3.h"
 #include "GlfwInclude.h"
 #include "Utils/Logger.h"
 #include "imgui_impl_glfw.h"
 
-
 namespace Rastery {
 class ApiCallbacks {
    public:
-    static void handleFrameBufferResize(GLFWwindow* pGlfwWindow, int width,
-                                        int height) {
+    static void handleFrameBufferResize(GLFWwindow* pGlfwWindow, int width, int height) {
         if (width == 0 || height == 0) {
             return;
         }
@@ -22,19 +21,18 @@ class ApiCallbacks {
         if (pWindow != nullptr) {
             pWindow->resize(width,
                             height);  // Window callback is handled in here
+            pWindow->mpCallback->handleFrameBufferResize(width, height);
         }
     }
 
-    static void handleKeyCallback(GLFWwindow* pGlfwWindow, int key, int _,
-                                  int action, int mods) {
+    static void handleKeyCallback(GLFWwindow* pGlfwWindow, int key, int _, int action, int mods) {
         auto* pWindow = (Window*)glfwGetWindowUserPointer(pGlfwWindow);
         if (pWindow != nullptr) {
             pWindow->mpCallback->handleKeyEvent(key, action, mods);
         }
     }
 };
-Window::Window(const WindowDesc& desc, ICallback* pCallback)
-    : mDesc(desc), mpCallback(pCallback) {
+Window::Window(const WindowDesc& desc, ICallback* pCallback) : mDesc(desc), mpCallback(pCallback) {
     // Init GLFW
     if (!glfwInit()) {
         logFatal("Failed to init GLFW");
@@ -46,9 +44,11 @@ Window::Window(const WindowDesc& desc, ICallback* pCallback)
     glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_FALSE);
 #endif
 
-    mpGlfwWindow = glfwCreateWindow(desc.width, desc.height, desc.title.c_str(),
-                                    nullptr, nullptr);
+    mpGlfwWindow = glfwCreateWindow(desc.width, desc.height, desc.title.c_str(), nullptr, nullptr);
     glfwMakeContextCurrent(mpGlfwWindow);
+    if (!desc.enableVSync) {
+        glfwSwapInterval(0);
+    }
 
     // Glad load gl from glfw
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
@@ -56,6 +56,8 @@ Window::Window(const WindowDesc& desc, ICallback* pCallback)
     }
 
     setCallbacks();
+
+    resize(desc.width, desc.height);
 
     // Gui init TODO: make it individual
     IMGUI_CHECKVERSION();
@@ -85,18 +87,13 @@ Window::~Window() {
     glfwDestroyWindow(mpGlfwWindow);
     glfwTerminate();
 }
-void Window::shouldClose(bool close) {
-    glfwSetWindowShouldClose(mpGlfwWindow, close ? GLFW_TRUE : GLFW_FALSE);
-}
+void Window::shouldClose(bool close) { glfwSetWindowShouldClose(mpGlfwWindow, close ? GLFW_TRUE : GLFW_FALSE); }
 
-bool Window::shouldClose() const {
-    return glfwWindowShouldClose(mpGlfwWindow) != GLFW_FALSE;
-}
+bool Window::shouldClose() const { return glfwWindowShouldClose(mpGlfwWindow) != GLFW_FALSE; }
 
 void Window::setCallbacks() {
     glfwSetWindowUserPointer(mpGlfwWindow, this);
-    glfwSetFramebufferSizeCallback(mpGlfwWindow,
-                                   &ApiCallbacks::handleFrameBufferResize);
+    glfwSetFramebufferSizeCallback(mpGlfwWindow, &ApiCallbacks::handleFrameBufferResize);
     glfwSetKeyCallback(mpGlfwWindow, &ApiCallbacks::handleKeyCallback);
 }
 }  // namespace Rastery

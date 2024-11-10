@@ -10,6 +10,7 @@ struct WindowDesc {
     uint32_t width = 800;
     uint32_t height = 600;
     std::string title = "Rastery";
+    bool enableVSync = false;
 };
 
 class Window;
@@ -18,6 +19,7 @@ class RASTERY_API ICallback {
    public:
     virtual void handleRenderFrame() = 0;
     virtual void handleKeyEvent(int key, int action, int mods) = 0;
+    virtual void handleFrameBufferResize(int width, int height) = 0;
 };
 
 class RASTERY_API Window {

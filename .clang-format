@@ -1,6 +1,6 @@
 ---
 Language: Cpp
-# BasedOnStyle:  Google
+BasedOnStyle:  Chromium
 AccessModifierOffset: -1
 AlignAfterOpenBracket: Align
 AlignConsecutiveMacros: false
@@ -54,7 +54,7 @@ BreakConstructorInitializersBeforeComma: false
 BreakConstructorInitializers: BeforeColon
 BreakAfterJavaFieldAnnotations: false
 BreakStringLiterals: true
-ColumnLimit: 80
+ColumnLimit: 140
 CommentPragmas: "^ IWYU pragma:"
 CompactNamespaces: false
 ConstructorInitializerAllOnOneLineOrOnePerLine: true

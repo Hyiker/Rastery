@@ -2,12 +2,17 @@ add_executable(Rastery
     Core/API/Texture.cpp
     Core/API/Shader.cpp
 
+    Core/Raster/RasterPipeline.cpp
+
     Core/App.cpp
+    Core/Camera.cpp
     Core/Error.cpp
     Core/Rastery.cpp
+    Core/Math.cpp
     Core/Window.cpp
 
     Utils/Image.cpp
+    Utils/Importer.cpp
     Utils/Logger.cpp
 )
 
@@ -28,7 +33,7 @@ target_sources(Rastery
 
     # lodepng
     ../External/lodepng/lodepng.cpp
-    
+
     # tinyexr
     ../External/tinyexr/miniz.c
 )
@@ -62,4 +67,12 @@ target_link_libraries(Rastery
     glm::glm
     TBB::tbb
     glfw
+)
+
+# Copy dependencies
+add_custom_command(TARGET Rastery POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    $<TARGET_RUNTIME_DLLS:Rastery>
+    $<TARGET_FILE_DIR:Rastery>
+    COMMAND_EXPAND_LISTS
 )
