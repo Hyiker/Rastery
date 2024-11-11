@@ -9,7 +9,6 @@ Diagnostics:
         performance-*,
         bugprone-*,
         portability-*,
-        modernize-*,
         # cppcoreguidelines-*,
       ]
     Remove:
@@ -19,7 +18,6 @@ Diagnostics:
         bugprone-unhandled-exception-at-new,
         bugprone-easily-swappable-parameters,
         readability-isolate-declaration,
-        modernize-return-braced-init-list,
       ]
   UnusedIncludes: Strict
 InlayHints:

@@ -40,5 +40,8 @@ class RASTERY_API App : public ICallback {
     } mRasterizer;
 
     Window::SharedPtr mpWindow;
+
+    // Statistics
+    uint32_t mFrameCount = 0u;
 };
 }  // namespace Rastery

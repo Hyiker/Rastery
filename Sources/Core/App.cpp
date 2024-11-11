@@ -65,10 +65,7 @@ App::App() {
             -1.0f, -1.0f, 0.0f, 0.0f, 0.0f,  // 左下角
             -1.0f, 1.0f,  0.0f, 0.0f, 1.0f   // 左上角
         };
-        unsigned int indices[] = {
-            0, 1, 3,
-            1, 2, 3
-        };
+        unsigned int indices[] = {0, 1, 3, 1, 2, 3};
         unsigned int VBO, EBO;
         glGenVertexArrays(1, &mVao);
         glGenBuffers(1, &VBO);
@@ -159,6 +156,8 @@ void App::handleRenderFrame() {
     blitFrameBuffer();
 
     renderUI();
+
+    mFrameCount++;
 }
 
 void App::executeRasterizer() const {
@@ -167,7 +166,7 @@ void App::executeRasterizer() const {
     Vertex v0, v1, v2;
     v0.position = float3(0, 0.3, 0);
     v1.position = float3(-0.5, -0.3, 0);
-    v2.position = float3(0.5, -0.3, 0);
+    v2.position = float3(0.5, -0.7, 0);
     vao.vertexData = {v0, v1, v2};
 
     CameraData data = mpCamera->getData();
@@ -221,8 +220,14 @@ void App::renderUI() {
     ImGui::NewFrame();
 
     auto& io = ImGui::GetIO();
-    ImGui::Begin("Status");
+
+    ImGui::Begin("Crafting table");
     ImGui::Text("%d fps, %.2f ms", int(1.f / io.DeltaTime), io.DeltaTime * 1000.f);
+
+    if (ImGui::CollapsingHeader("Rasterizer", ImGuiTreeNodeFlags_DefaultOpen)) {
+        // Pipeline
+        mRasterizer.mpPipeline->renderUI();
+    }
 
     ImGui::End();
 
@@ -231,8 +236,10 @@ void App::renderUI() {
 }
 
 void App::beginFrame() {
-    glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
+    mRasterizer.mpColorTexture->clear(float4(0, 0, 0, 1));
+    mRasterizer.mpDepthTexture->clear(float4(0, 0, 0, 1));
 
     if (mpCamera) {
         mpCamera->computeCameraData();

@@ -9,6 +9,7 @@
 
 #include "Core/API/Texture.h"
 #include "Core/API/Vao.h"
+#include "Utils/Gui.h"
 #include "Utils/Logger.h"
 namespace Rastery {
 
@@ -20,6 +21,11 @@ void RasterPipeline::execute(const CpuVao& vao, VertexShader vertexShader, Fragm
     auto primitives = executeVertexShader(vao, vertexShader);
 
     executeRasterization(primitives, fragmentShader);
+}
+void RasterPipeline::renderUI() {
+    dropdown("Cull Mode", mDesc.cullMode);
+
+    dropdown("Raster Mode", mDesc.rasterMode);
 }
 
 static bool isFrontFace(const TrianglePrimitive& primitive) {
@@ -109,7 +115,7 @@ tbb::concurrent_vector<TrianglePrimitive> RasterPipeline::executeVertexShader(co
 /** Convert from NDC((-1, -1, 0) - (1, 1, 1))
  * to screen space(0, 0) - (width, height)
  */
-static float3 ndcToScreenSpace(int width, int height, float3 ndcCoord) {
+static float2 ndcToScreenSpace(int width, int height, float3 ndcCoord) {
     float2 pixel = float2(ndcCoord.x, -ndcCoord.y);
     pixel = pixel * float2(0.5) + float2(0.5);
     pixel *= float2(width, height);
@@ -137,39 +143,71 @@ void RasterPipeline::executeRasterization(const tbb::concurrent_vector<TriangleP
     // TODO: Z-Buffer algorithm here
     // Cull the pixels in screen space
     switch (mDesc.rasterMode) {
+        case RasterMode::Naive: {
+            for (const auto& primitive : primitives) {
+                float2 v[3];
+                v[0] = ndcToScreenSpace(width, height, primitive.v0.getPosition());
+                v[1] = ndcToScreenSpace(width, height, primitive.v1.getPosition());
+                v[2] = ndcToScreenSpace(width, height, primitive.v2.getPosition());
+                tbb::parallel_for(tbb::blocked_range2d<int>(0, height, 0, width), [&](tbb::blocked_range2d<int> r) {
+                    for (int y = r.rows().begin(), y_end = r.rows().end(); y < y_end; y++) {
+                        for (int x = r.cols().begin(), x_end = r.cols().end(); x < x_end; x++) {
+                            float2 pixelCenter = float2(x + 0.5, y + 0.5);
+                            if (isInsidePrimitive(v[0], v[1], v[2], pixelCenter)) {
+                                mpColorTexture->fetch<float4>(x, y) = fragmentShader();
+                            }
+                        }
+                    }
+                });
+            }
+        } break;
         case RasterMode::ScanLine: {
             for (const auto& primitive : primitives) {
                 // Convert from NDC to screen space
-                float3 v[3];
+                float2 v[3];
                 v[0] = ndcToScreenSpace(width, height, primitive.v0.getPosition());
                 v[1] = ndcToScreenSpace(width, height, primitive.v1.getPosition());
                 v[2] = ndcToScreenSpace(width, height, primitive.v2.getPosition());
 
                 // Sort vertices by y
                 if (v[0].y > v[1].y) {
-                    std::swap(s[0], s[1]);
+                    std::swap(v[0], v[1]);
                 }
-                
                 if (v[1].y > v[2].y) {
-                    std::swap(s[1], s[2]);
+                    std::swap(v[1], v[2]);
                 }
-
                 if (v[0].y > v[1].y) {
-                    std::swap(s[0], s[1]);
+                    std::swap(v[0], v[1]);
                 }
-                
-                
 
-                tbb::parallel_for(tbb::blocked_range2d<int>(0, height, 0, width), [&](tbb::blocked_range2d<int> r) {
-                    for (int y = r.rows().begin(), y_end = r.rows().end(); y < y_end; y++) {
-                        for (int x = r.cols().begin(), x_end = r.cols().end(); x < x_end; x++) {
-                            float2 pixelCenter = float2(x + 0.5, y + 0.5);
-                            if (isInsidePrimitive(v0, v1, v2, pixelCenter)) {
-                                mpColorTexture->fetch<float4>(x, y) = fragmentShader();
-                            }
-                        }
+                float triangleHeight = v[2].y - v[0].y;
+                float upperHeight = v[1].y - v[0].y;
+                float lowerHeight = v[2].y - v[1].y;
+                float2 vMid = lerp(v[0], v[2], upperHeight / triangleHeight);
+                // Ensure vMid on the right side
+                if (vMid.x < v[1].x) std::swap(vMid, v[1]);
+
+                // Upper triangle
+                for (int yOffset = 0; yOffset < (int)std::ceil(upperHeight); yOffset++) {
+                    float y = std::floor(v[0].y) + 0.5f + float(yOffset);
+                    float xLeft = std::floor(std::lerp(v[0].x, v[1].x, (y - v[0].y) / upperHeight));
+                    float xRight = std::ceil(std::lerp(v[0].x, vMid.x, (y - v[0].y) / upperHeight));
+                    for (float x = xLeft; x <= xRight; x += 1.f) {
+                        float2 pixelCenter = float2(std::floor(x) + 0.5f, y);
+                        mpColorTexture->fetch<float4>(uint2(x, y)) = fragmentShader();
                     }
-                });
+                }
+
+                // Lower triangle
+                for (int yOffset = 0; yOffset < (int)std::ceil(lowerHeight); yOffset++) {
+                    float y = std::floor(v[1].y) + 0.5f + float(yOffset);
+                    float xLeft = std::floor(std::lerp(v[1].x, v[2].x, (y - v[1].y) / lowerHeight));
+                    float xRight = std::ceil(std::lerp(vMid.x, v[2].x, (y - vMid.y) / lowerHeight));
+                    for (float x = xLeft; x <= xRight; x += 1.f) {
+                        float2 pixelCenter = float2(std::floor(x) + 0.5f, y);
+                        mpColorTexture->fetch<float4>(uint2(x, y)) = fragmentShader();
+                    }
+                }
             }
         } break;
         case RasterMode::Hierarchy:

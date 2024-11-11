@@ -6,6 +6,7 @@
 
 #include "Core/API/Texture.h"
 #include "Core/API/Vao.h"
+#include "Core/Enum.h"
 #include "Core/Macros.h"
 namespace Rastery {
 
@@ -21,10 +22,27 @@ using FragmentShader = std::function<float4()>;
 
 enum class CullMode { BackFace, FrontFace, None };
 
+RASTERY_ENUM_INFO(CullMode, {
+                                {CullMode::BackFace, "BackFace"},
+                                {CullMode::FrontFace, "FrontFace"},
+                                {CullMode::None, "None"},
+                            })
+
+RASTERY_ENUM_REGISTER(CullMode)
+
 enum class RasterMode {
+    Naive,     ///< Very slow
     ScanLine,  ///< Use scoped scan line for each triangle
     Hierarchy  ///< Hierarchy z-buffer
 };
+
+RASTERY_ENUM_INFO(RasterMode, {
+                                  {RasterMode::Naive, "Naive"},
+                                  {RasterMode::ScanLine, "ScanLine"},
+                                  {RasterMode::Hierarchy, "Hierarchy"},
+                              })
+
+RASTERY_ENUM_REGISTER(RasterMode)
 
 struct RasterDesc {
     // We actually mixup framebuffer and raster state here
@@ -52,12 +70,12 @@ class RASTERY_API RasterPipeline {
      */
     void execute(const CpuVao& vao, VertexShader vertexShader, FragmentShader fragmentShader);
 
+    void renderUI();
+
    private:
     /** Vertex shader for projection misc.
      */
     [[nodiscard]] tbb::concurrent_vector<TrianglePrimitive> executeVertexShader(const CpuVao& vao, VertexShader vertexShader) const;
-
-    
 
     void executeRasterization(const tbb::concurrent_vector<TrianglePrimitive>& primitives, FragmentShader fragmentShader);
 

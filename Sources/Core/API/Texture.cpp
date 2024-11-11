@@ -2,7 +2,11 @@
 
 #include <glad.h>
 
+#include <cstdint>
+#include <span>
+
 #include "Core/Error.h"
+
 namespace Rastery {
 
 static int toGraphicsEnum(TextureWrap textureWrap) {
@@ -56,7 +60,7 @@ static int toSubresourceType(TextureFormat format) {
     RASTERY_UNREACHABLE();
 }
 
-int getFormatBytes(TextureFormat format) {
+constexpr int getFormatBytes(TextureFormat format) {
     switch (format) {
         case TextureFormat::Rgba8:
             return 4;
@@ -109,5 +113,32 @@ Texture::~Texture() { glDeleteTextures(1, &mId); }
 CpuTexture::CpuTexture(const TextureDesc& desc) : mDesc(desc) { mData.resize(desc.width * desc.height * getFormatBytes(desc.format), 0); }
 
 void* CpuTexture::getPtr() { return mData.data(); }
+
+void CpuTexture::clear(float4 color) {
+    // TODO: use more flexible typing + byteSize
+    TextureFormat format = mDesc.format;
+    switch (format) {
+        case TextureFormat::Rgba8: {
+            color *= 255.f;
+            unsigned char colorRgba8[4]{
+                (unsigned char)color[0],
+                (unsigned char)color[1],
+                (unsigned char)color[2],
+                (unsigned char)color[3],
+            };
+            uint32_t v;
+            std::memcpy(&v, colorRgba8, sizeof(uint32_t));
+            std::span<uint32_t> view((uint32_t*)(mData.data()), mData.size() / getFormatBytes(format));
+            std::fill(view.begin(), view.end(), v);
+        } break;
+        case TextureFormat::Rgba32F: {
+            std::span<float4> view((float4*)(mData.data()), mData.size() / getFormatBytes(format));
+            std::fill(view.begin(), view.end(), color);
+        } break;
+        default: {
+            RASTERY_UNREACHABLE();
+        } break;
+    }
+}
 
 }  // namespace Rastery

@@ -50,6 +50,16 @@ T degrees(T rad) {
     return glm::degrees(rad);
 }
 
+template <typename T>
+T lerp(const T& left, const T& right, const T& t) {
+    return std::lerp(left, right, t);
+}
+
+template <typename T>
+T lerp(const T& left, const T& right, float t) {
+    return left * (1.0f - t) + right * t;
+}
+
 // Transform functions use Right-handed, y-up coordinates
 
 /**

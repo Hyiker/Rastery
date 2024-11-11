@@ -11,6 +11,7 @@ add_executable(Rastery
     Core/Math.cpp
     Core/Window.cpp
 
+    Utils/Gui.cpp
     Utils/Image.cpp
     Utils/Importer.cpp
     Utils/Logger.cpp

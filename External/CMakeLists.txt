@@ -1,9 +1,11 @@
 include(CPM.cmake)
 
 # fmtlib
+# v11.0.2 has issue with enum format
+# https://github.com/fmtlib/fmt/issues/4091
 CPMAddPackage(
     NAME fmt
-    URL "https://github.com/fmtlib/fmt/archive/refs/tags/11.0.2.tar.gz"
+    URL "https://github.com/fmtlib/fmt/archive/refs/tags/10.2.1.tar.gz"
 )
 
 # glm

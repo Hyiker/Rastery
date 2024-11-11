@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "Core/Macros.h"
+#include "Core/Math.h"
 
 namespace Rastery {
 
@@ -15,7 +16,7 @@ enum class TextureFilter { Nearest, Linear, MipMap, Count };
 
 enum class TextureFormat { Rgba8, Rgba32F, Count };
 
-int getFormatBytes(TextureFormat format);
+constexpr int getFormatBytes(TextureFormat format);
 
 struct TextureWrapDesc {
     TextureWrap wrapS = TextureWrap::Repeat;
@@ -107,11 +108,18 @@ class RASTERY_API CpuTexture {
     void* getPtr();
 
     template <typename T>
-    CpuTexelProxy<T> fetch(int x, int y);
+    CpuTexelProxy<T> fetch(uint2 xy) {
+        return fetch<T>(xy.x, xy.y);
+    }
+
+    template <typename T>
+    CpuTexelProxy<T> fetch(uint32_t x, uint32_t y);
 
     ~CpuTexture() = default;
 
     [[nodiscard]] const TextureDesc& getDesc() const { return mDesc; }
+
+    void clear(float4 color);
 
    private:
     TextureDesc mDesc;
@@ -119,8 +127,8 @@ class RASTERY_API CpuTexture {
 };
 
 template <typename T>
-CpuTexelProxy<T> CpuTexture::fetch(int x, int y) {
-    int offset = (x + y * mDesc.width) * getFormatBytes(mDesc.format);
+CpuTexelProxy<T> CpuTexture::fetch(uint32_t x, uint32_t y) {
+    uint32_t offset = (x + y * mDesc.width) * getFormatBytes(mDesc.format);
     return CpuTexelProxy<T>(mData.data() + offset);
 }
 
