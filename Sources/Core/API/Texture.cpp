@@ -37,6 +37,8 @@ static int toGraphicsEnum(TextureFormat format) {
             return GL_RGBA8;
         case TextureFormat::Rgba32F:
             return GL_RGBA32F;
+        case TextureFormat::R32F:
+            return GL_R32F;
     }
     RASTERY_UNREACHABLE();
 }
@@ -46,6 +48,8 @@ static int toSubresourceFormat(TextureFormat format) {
         case TextureFormat::Rgba8:
         case TextureFormat::Rgba32F:
             return GL_RGBA;
+        case TextureFormat::R32F:
+            return GL_R;
     }
     RASTERY_UNREACHABLE();
 }
@@ -55,6 +59,7 @@ static int toSubresourceType(TextureFormat format) {
         case TextureFormat::Rgba8:
             return GL_UNSIGNED_BYTE;
         case TextureFormat::Rgba32F:
+        case TextureFormat::R32F:
             return GL_FLOAT;
     }
     RASTERY_UNREACHABLE();
@@ -66,6 +71,8 @@ constexpr int getFormatBytes(TextureFormat format) {
             return 4;
         case TextureFormat::Rgba32F:
             return 4 * 4;
+        case TextureFormat::R32F:
+            return 4;
     }
     RASTERY_UNREACHABLE();
 }
@@ -134,6 +141,10 @@ void CpuTexture::clear(float4 color) {
         case TextureFormat::Rgba32F: {
             std::span<float4> view((float4*)(mData.data()), mData.size() / getFormatBytes(format));
             std::fill(view.begin(), view.end(), color);
+        } break;
+        case TextureFormat::R32F: {
+            std::span<float> view((float*)(mData.data()), mData.size() / getFormatBytes(format));
+            std::fill(view.begin(), view.end(), color.r);
         } break;
         default: {
             RASTERY_UNREACHABLE();

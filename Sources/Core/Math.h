@@ -20,6 +20,10 @@ using int2 = glm::ivec2;
 using int3 = glm::ivec3;
 using int4 = glm::ivec4;
 
+using bool2 = glm::bvec2;
+using bool3 = glm::bvec3;
+using bool4 = glm::bvec4;
+
 using float2 = glm::vec2;
 using float3 = glm::vec3;
 using float4 = glm::vec4;
@@ -58,6 +62,16 @@ T lerp(const T& left, const T& right, const T& t) {
 template <typename T>
 T lerp(const T& left, const T& right, float t) {
     return left * (1.0f - t) + right * t;
+}
+
+template <typename T>
+bool any(const T& v) {
+    return glm::any(v);
+}
+
+template <typename T>
+bool all(const T& v) {
+    return glm::all(v);
 }
 
 // Transform functions use Right-handed, y-up coordinates

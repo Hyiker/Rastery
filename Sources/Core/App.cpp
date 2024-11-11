@@ -58,13 +58,8 @@ App::App() {
     RASTERY_CHECK_GL_ERROR();
 
     {
-        float vertices[] = {
-            // 位置          // 纹理坐标
-            1.0f,  1.0f,  0.0f, 1.0f, 1.0f,  // 右上角
-            1.0f,  -1.0f, 0.0f, 1.0f, 0.0f,  // 右下角
-            -1.0f, -1.0f, 0.0f, 0.0f, 0.0f,  // 左下角
-            -1.0f, 1.0f,  0.0f, 0.0f, 1.0f   // 左上角
-        };
+        float vertices[] = {1.0f,  1.0f,  0.0f, 1.0f, 1.0f, 1.0f,  -1.0f, 0.0f, 1.0f, 0.0f,
+                            -1.0f, -1.0f, 0.0f, 0.0f, 0.0f, -1.0f, 1.0f,  0.0f, 0.0f, 1.0f};
         unsigned int indices[] = {0, 1, 3, 1, 2, 3};
         unsigned int VBO, EBO;
         glGenVertexArrays(1, &mVao);
@@ -117,7 +112,7 @@ void App::handleFrameBufferResize(int width, int height) {
     // Recreate rasterization pipeline
     {
         TextureDesc depthDesc{.type = GL_TEXTURE_2D,
-                              .format = TextureFormat::Rgba32F,
+                              .format = TextureFormat::R32F,
                               .width = (int)width,
                               .height = (int)height,
                               .depth = 0,
@@ -161,13 +156,28 @@ void App::handleRenderFrame() {
 }
 
 void App::executeRasterizer() const {
-    CpuVao vao;
-    vao.indexData = {};
-    Vertex v0, v1, v2;
-    v0.position = float3(0, 0.3, 0);
-    v1.position = float3(-0.5, -0.3, 0);
-    v2.position = float3(0.5, -0.7, 0);
-    vao.vertexData = {v0, v1, v2};
+    mRasterizer.mpColorTexture->clear(float4(0, 0, 0, 0));
+    mRasterizer.mpDepthTexture->clear(float4(0));
+
+    CpuVao vao0;
+    {
+        vao0.indexData = {};
+        Vertex v0, v1, v2;
+        v0.position = float3(0, 0.3, 0);
+        v1.position = float3(-0.5, -0.3, 0);
+        v2.position = float3(0.5, -0.7, 0);
+        vao0.vertexData = {v0, v1, v2};
+    }
+
+    CpuVao vao1;
+    {
+        vao1.indexData = {};
+        Vertex v0, v1, v2;
+        v0.position = float3(0.3, 0.3, 0);
+        v1.position = float3(-0.3, -0.3, -0.1);
+        v2.position = float3(0.5, -0.7, 0.5);
+        vao1.vertexData = {v0, v1, v2};
+    }
 
     CameraData data = mpCamera->getData();
 
@@ -182,9 +192,12 @@ void App::executeRasterizer() const {
         return out;
     };
 
-    auto fragmentShader = [&]() { return float4(1.f, 0.f, 0.f, 0.f); };
+    auto fragmentShader0 = [&]() { return float4(1.f, 0.f, 0.f, 0.f); };
+    auto fragmentShader1 = [&]() { return float4(0.f, 0.f, 1.f, 0.f); };
 
-    mRasterizer.mpPipeline->execute(vao, vertexShader, fragmentShader);
+    mRasterizer.mpPipeline->beginFrame();
+    mRasterizer.mpPipeline->draw(vao0, vertexShader, fragmentShader0);
+    mRasterizer.mpPipeline->draw(vao1, vertexShader, fragmentShader1);
 }
 
 void App::blitFrameBuffer() const {
@@ -238,8 +251,6 @@ void App::renderUI() {
 void App::beginFrame() {
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
-    mRasterizer.mpColorTexture->clear(float4(0, 0, 0, 1));
-    mRasterizer.mpDepthTexture->clear(float4(0, 0, 0, 1));
 
     if (mpCamera) {
         mpCamera->computeCameraData();

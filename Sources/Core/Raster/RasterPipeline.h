@@ -11,10 +11,15 @@
 namespace Rastery {
 
 struct VertexOut {
-    float4 position;
+    float4 position;  ///< xyz = NDC coordinate, w keeps the original depth(before homogeneous division)
     float3 normal;
     float2 texCoord;
     [[nodiscard]] float3 getPosition() const { return position; }
+
+    friend VertexOut operator+(const VertexOut& lhs, const VertexOut& rhs);
+    friend VertexOut operator-(const VertexOut& lhs, const VertexOut& rhs);
+    friend VertexOut operator*(const VertexOut& vertex, float scalar);
+    friend VertexOut operator*(float scalar, const VertexOut& vertex);
 };
 
 using VertexShader = std::function<VertexOut(Vertex)>;
@@ -60,19 +65,32 @@ struct TrianglePrimitive {
 
 class RASTERY_API RasterPipeline {
    public:
+    struct Stats {
+        uint32_t triangleCount;  ///< Triangle primitive count.(after culling)
+        uint32_t drawCallCount;  ///< Time of draw call count.
+        float rasterizeTime;     ///< Rasterization time in ms.
+    };
+
     using SharedPtr = std::shared_ptr<RasterPipeline>;
     RasterPipeline(const RasterDesc& desc, const CpuTexture::SharedPtr& pDepthTexture, const CpuTexture::SharedPtr& pColorTexture);
+
+    void beginFrame();
 
     /** Execute rasterization pipeline.
      *
      * @param vao CPU vertex array object data
      * TODO: move shaders elsewhere
      */
-    void execute(const CpuVao& vao, VertexShader vertexShader, FragmentShader fragmentShader);
+    void draw(const CpuVao& vao, VertexShader vertexShader, FragmentShader fragmentShader);
 
     void renderUI();
 
    private:
+    Stats mStats;
+    void renderStats() const;
+
+    bool zbufferTest(float2 sample, float depth);
+
     /** Vertex shader for projection misc.
      */
     [[nodiscard]] tbb::concurrent_vector<TrianglePrimitive> executeVertexShader(const CpuVao& vao, VertexShader vertexShader) const;

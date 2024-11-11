@@ -15,6 +15,7 @@ add_executable(Rastery
     Utils/Image.cpp
     Utils/Importer.cpp
     Utils/Logger.cpp
+    Utils/Timer.cpp
 )
 
 target_sources(Rastery

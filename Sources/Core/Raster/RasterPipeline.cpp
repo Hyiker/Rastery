@@ -5,19 +5,58 @@
 #include <tbb/parallel_for_each.h>
 
 #include <memory>
+#include <sstream>
 #include <vector>
 
 #include "Core/API/Texture.h"
 #include "Core/API/Vao.h"
+#include "Core/Error.h"
 #include "Utils/Gui.h"
 #include "Utils/Logger.h"
+#include "Utils/Timer.h"
+#include "glm/gtc/quaternion.hpp"
 namespace Rastery {
+
+VertexOut operator+(const VertexOut& lhs, const VertexOut& rhs) {
+    VertexOut result;
+    result.position = lhs.position + rhs.position;
+    result.normal = lhs.normal + rhs.normal;
+    result.texCoord = lhs.texCoord + rhs.texCoord;
+    return result;
+}
+
+VertexOut operator-(const VertexOut& lhs, const VertexOut& rhs) {
+    VertexOut result;
+    result.position = lhs.position - rhs.position;
+    result.normal = lhs.normal - rhs.normal;
+    result.texCoord = lhs.texCoord - rhs.texCoord;
+    return result;
+}
+
+VertexOut operator*(const VertexOut& vertex, float scalar) {
+    VertexOut result;
+    result.position = vertex.position * scalar;
+    result.normal = vertex.normal * scalar;
+    result.texCoord = vertex.texCoord * scalar;
+    return result;
+}
+
+VertexOut operator*(float scalar, const VertexOut& vertex) {
+    return vertex * scalar;  // 利用前面定义的乘法
+}
 
 RasterPipeline::RasterPipeline(const RasterDesc& desc, const CpuTexture::SharedPtr& pDepthTexture,
                                const CpuTexture::SharedPtr& pColorTexture)
     : mDesc(desc), mpDepthTexture(pDepthTexture), mpColorTexture(pColorTexture) {}
 
-void RasterPipeline::execute(const CpuVao& vao, VertexShader vertexShader, FragmentShader fragmentShader) {
+void RasterPipeline::beginFrame() {
+    // Clear stats
+    mStats.drawCallCount = 0;
+    mStats.triangleCount = 0;
+    mStats.rasterizeTime = 0.f;
+}
+
+void RasterPipeline::draw(const CpuVao& vao, VertexShader vertexShader, FragmentShader fragmentShader) {
     auto primitives = executeVertexShader(vao, vertexShader);
 
     executeRasterization(primitives, fragmentShader);
@@ -26,6 +65,18 @@ void RasterPipeline::renderUI() {
     dropdown("Cull Mode", mDesc.cullMode);
 
     dropdown("Raster Mode", mDesc.rasterMode);
+
+    renderStats();
+}
+
+void RasterPipeline::renderStats() const {
+    std::stringstream ss;
+
+    ss << "Statistics:\n"
+       << fmt::format("Rasterize time: {:.2f}ms\n", mStats.rasterizeTime) << "Draw call count: " << mStats.drawCallCount
+       << "\nTriangle count: " << mStats.triangleCount;
+
+    ImGui::Text("%s", ss.str().c_str());
 }
 
 static bool isFrontFace(const TrianglePrimitive& primitive) {
@@ -122,7 +173,7 @@ static float2 ndcToScreenSpace(int width, int height, float3 ndcCoord) {
     return float3(pixel, ndcCoord.z);
 }
 
-static bool isInsidePrimitive(float2 v0, float2 v1, float2 v2, float2 p) {
+static bool isInsidePrimitive(float2 v0, float2 v1, float2 v2, float2 p, float3& barycentricCoord) {
     float2 v0v1 = v1 - v0;
     float2 v0v2 = v2 - v0;
     float2 v0p = p - v0;
@@ -134,85 +185,112 @@ static bool isInsidePrimitive(float2 v0, float2 v1, float2 v2, float2 p) {
     float a = det_pv2 / det_v1v2;
     float b = det_v1p / det_v1v2;
 
+    barycentricCoord = float3(a, b, 1 - a - b);
+
     return a > 0.0 && b > 0.0 && (a + b) < 1.0;
+}
+bool RasterPipeline::zbufferTest(float2 sample, float depth) {
+    float fragDepth = mpColorTexture->fetch<float>(uint2(sample));
+    bool passed = depth > fragDepth;
+    if (passed) {
+        // RHS + ZO depth, the larger the closer
+        mpColorTexture->fetch<float>(uint2(sample)) = depth;
+    }
+    return passed;
 }
 
 void RasterPipeline::executeRasterization(const tbb::concurrent_vector<TrianglePrimitive>& primitives, FragmentShader fragmentShader) {
+    Timer timer;
+
     int width = mDesc.width;
     int height = mDesc.height;
-    // TODO: Z-Buffer algorithm here
     // Cull the pixels in screen space
-    switch (mDesc.rasterMode) {
-        case RasterMode::Naive: {
-            for (const auto& primitive : primitives) {
-                float2 v[3];
-                v[0] = ndcToScreenSpace(width, height, primitive.v0.getPosition());
-                v[1] = ndcToScreenSpace(width, height, primitive.v1.getPosition());
-                v[2] = ndcToScreenSpace(width, height, primitive.v2.getPosition());
-                tbb::parallel_for(tbb::blocked_range2d<int>(0, height, 0, width), [&](tbb::blocked_range2d<int> r) {
-                    for (int y = r.rows().begin(), y_end = r.rows().end(); y < y_end; y++) {
-                        for (int x = r.cols().begin(), x_end = r.cols().end(); x < x_end; x++) {
-                            float2 pixelCenter = float2(x + 0.5, y + 0.5);
-                            if (isInsidePrimitive(v[0], v[1], v[2], pixelCenter)) {
-                                mpColorTexture->fetch<float4>(x, y) = fragmentShader();
+    if (mDesc.rasterMode == RasterMode::Naive || mDesc.rasterMode == RasterMode::ScanLine) {
+        for (const auto& primitive : primitives) {
+            float2 v[3];
+            v[0] = ndcToScreenSpace(width, height, primitive.v0.getPosition());
+            v[1] = ndcToScreenSpace(width, height, primitive.v1.getPosition());
+            v[2] = ndcToScreenSpace(width, height, primitive.v2.getPosition());
+
+            auto rasterizePoint = [&](int2 pixel) {
+                if (any(glm::lessThan(pixel, int2(0))) || any(glm::greaterThanEqual(pixel, int2(width, height)))) return;
+
+                float2 samplePoint = float2(pixel) + float2(0.5);
+                float3 baryCoord;
+                if (!isInsidePrimitive(v[0], v[1], v[2], samplePoint, baryCoord)) return;
+
+                // Interpolated fragment data
+                VertexOut interpolateVertex = primitive.v0 * baryCoord.x + primitive.v1 * baryCoord.y + primitive.v2 * baryCoord.z;
+
+                if (!zbufferTest(samplePoint, interpolateVertex.position.z)) {
+                    return;
+                }
+
+                mpColorTexture->fetch<float4>(pixel) = fragmentShader();
+            };
+
+            switch (mDesc.rasterMode) {
+                case RasterMode::Naive: {
+                    tbb::parallel_for(tbb::blocked_range2d<int>(0, height, 0, width), [&](tbb::blocked_range2d<int> r) {
+                        for (int y = r.rows().begin(), y_end = r.rows().end(); y < y_end; y++) {
+                            for (int x = r.cols().begin(), x_end = r.cols().end(); x < x_end; x++) {
+                                rasterizePoint(int2(x, y));
                             }
                         }
+                    });
+
+                } break;
+                case RasterMode::ScanLine: {
+                    // Sort vertices by y
+                    if (v[0].y > v[1].y) {
+                        std::swap(v[0], v[1]);
                     }
-                });
+                    if (v[1].y > v[2].y) {
+                        std::swap(v[1], v[2]);
+                    }
+                    if (v[0].y > v[1].y) {
+                        std::swap(v[0], v[1]);
+                    }
+
+                    float triangleHeight = v[2].y - v[0].y;
+                    float upperHeight = v[1].y - v[0].y;
+                    float lowerHeight = v[2].y - v[1].y;
+                    float2 vMid = lerp(v[0], v[2], upperHeight / triangleHeight);
+                    // Ensure vMid on the right side
+                    if (vMid.x < v[1].x) std::swap(vMid, v[1]);
+
+                    // Upper triangle
+                    tbb::parallel_for(0, (int)std::ceil(upperHeight), [&](int yOffset) {
+                        float y = std::floor(v[0].y) + float(yOffset);
+                        float xLeft = std::floor(std::lerp(v[0].x, v[1].x, (y + 1 - v[0].y) / upperHeight));
+                        float xRight = std::ceil(std::lerp(v[0].x, vMid.x, (y + 1 - v[0].y) / upperHeight));
+                        for (float x = xLeft; x <= xRight; x += 1.f) {
+                            rasterizePoint(int2(x, y));
+                        }
+                    });
+
+                    // Lower triangle
+                    tbb::parallel_for(0, (int)std::ceil(lowerHeight), [&](int yOffset) {
+                        float y = std::floor(v[1].y) + float(yOffset);
+                        float xLeft = std::floor(std::lerp(v[1].x, v[2].x, (y - v[1].y - 1) / lowerHeight));
+                        float xRight = std::ceil(std::lerp(vMid.x, v[2].x, (y - vMid.y - 1) / lowerHeight));
+                        for (float x = xLeft; x <= xRight; x += 1.f) {
+                            rasterizePoint(int2(x, y));
+                        }
+                    });
+
+                } break;
+                default: {
+                    RASTERY_UNREACHABLE();
+                };
             }
-        } break;
-        case RasterMode::ScanLine: {
-            for (const auto& primitive : primitives) {
-                // Convert from NDC to screen space
-                float2 v[3];
-                v[0] = ndcToScreenSpace(width, height, primitive.v0.getPosition());
-                v[1] = ndcToScreenSpace(width, height, primitive.v1.getPosition());
-                v[2] = ndcToScreenSpace(width, height, primitive.v2.getPosition());
-
-                // Sort vertices by y
-                if (v[0].y > v[1].y) {
-                    std::swap(v[0], v[1]);
-                }
-                if (v[1].y > v[2].y) {
-                    std::swap(v[1], v[2]);
-                }
-                if (v[0].y > v[1].y) {
-                    std::swap(v[0], v[1]);
-                }
-
-                float triangleHeight = v[2].y - v[0].y;
-                float upperHeight = v[1].y - v[0].y;
-                float lowerHeight = v[2].y - v[1].y;
-                float2 vMid = lerp(v[0], v[2], upperHeight / triangleHeight);
-                // Ensure vMid on the right side
-                if (vMid.x < v[1].x) std::swap(vMid, v[1]);
-
-                // Upper triangle
-                for (int yOffset = 0; yOffset < (int)std::ceil(upperHeight); yOffset++) {
-                    float y = std::floor(v[0].y) + 0.5f + float(yOffset);
-                    float xLeft = std::floor(std::lerp(v[0].x, v[1].x, (y - v[0].y) / upperHeight));
-                    float xRight = std::ceil(std::lerp(v[0].x, vMid.x, (y - v[0].y) / upperHeight));
-                    for (float x = xLeft; x <= xRight; x += 1.f) {
-                        float2 pixelCenter = float2(std::floor(x) + 0.5f, y);
-                        mpColorTexture->fetch<float4>(uint2(x, y)) = fragmentShader();
-                    }
-                }
-
-                // Lower triangle
-                for (int yOffset = 0; yOffset < (int)std::ceil(lowerHeight); yOffset++) {
-                    float y = std::floor(v[1].y) + 0.5f + float(yOffset);
-                    float xLeft = std::floor(std::lerp(v[1].x, v[2].x, (y - v[1].y) / lowerHeight));
-                    float xRight = std::ceil(std::lerp(vMid.x, v[2].x, (y - vMid.y) / lowerHeight));
-                    for (float x = xLeft; x <= xRight; x += 1.f) {
-                        float2 pixelCenter = float2(std::floor(x) + 0.5f, y);
-                        mpColorTexture->fetch<float4>(uint2(x, y)) = fragmentShader();
-                    }
-                }
-            }
-        } break;
-        case RasterMode::Hierarchy:
-            break;
+        }
+    } else {
     }
+    timer.end();
+    mStats.drawCallCount++;
+    mStats.triangleCount += primitives.size();
+    mStats.rasterizeTime += timer.elapsedMilliseconds();
 }
 
 }  // namespace Rastery

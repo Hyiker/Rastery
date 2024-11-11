@@ -14,7 +14,7 @@ enum class TextureWrap { Repeat, ClampToEdge, Count };
 
 enum class TextureFilter { Nearest, Linear, MipMap, Count };
 
-enum class TextureFormat { Rgba8, Rgba32F, Count };
+enum class TextureFormat { Rgba8, Rgba32F, R32F, Count };
 
 constexpr int getFormatBytes(TextureFormat format);
 
