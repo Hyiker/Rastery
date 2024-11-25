@@ -1,6 +1,7 @@
 add_executable(Rastery
     Core/API/Texture.cpp
     Core/API/Shader.cpp
+    Core/API/Vao.cpp
 
     Core/Raster/RasterPipeline.cpp
 
@@ -69,12 +70,15 @@ target_link_libraries(Rastery
     glm::glm
     TBB::tbb
     glfw
+    assimp
 )
 
 # Copy dependencies
-add_custom_command(TARGET Rastery POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    $<TARGET_RUNTIME_DLLS:Rastery>
-    $<TARGET_FILE_DIR:Rastery>
-    COMMAND_EXPAND_LISTS
-)
+if(WIN32)
+    add_custom_command(TARGET Rastery POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_RUNTIME_DLLS:Rastery>
+        $<TARGET_FILE_DIR:Rastery>
+        COMMAND_EXPAND_LISTS
+    )
+endif()

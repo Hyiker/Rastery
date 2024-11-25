@@ -1,4 +1,5 @@
 #pragma once
+#include <filesystem>
 #include <memory>
 #include <vector>
 
@@ -13,7 +14,11 @@ struct Vertex {
 };
 
 struct RASTERY_API CpuVao {
+    using SharedPtr = std::shared_ptr<CpuVao>;
     std::vector<Vertex> vertexData;
     std::vector<uint32_t> indexData;
 };
+// TODO move the importer part to Utils/Importer.h
+CpuVao::SharedPtr createFromFile(const std::filesystem::path& p);
+
 }  // namespace Rastery

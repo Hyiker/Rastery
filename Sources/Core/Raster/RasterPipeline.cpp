@@ -4,6 +4,7 @@
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_for_each.h>
 
+#include <array>
 #include <memory>
 #include <sstream>
 #include <vector>
@@ -15,10 +16,12 @@
 #include "Utils/Logger.h"
 #include "Utils/Timer.h"
 #include "glm/gtc/quaternion.hpp"
+
 namespace Rastery {
 
 VertexOut operator+(const VertexOut& lhs, const VertexOut& rhs) {
     VertexOut result;
+    result.rasterPosition = lhs.rasterPosition + rhs.rasterPosition;
     result.position = lhs.position + rhs.position;
     result.normal = lhs.normal + rhs.normal;
     result.texCoord = lhs.texCoord + rhs.texCoord;
@@ -27,6 +30,7 @@ VertexOut operator+(const VertexOut& lhs, const VertexOut& rhs) {
 
 VertexOut operator-(const VertexOut& lhs, const VertexOut& rhs) {
     VertexOut result;
+    result.rasterPosition = lhs.rasterPosition + rhs.rasterPosition;
     result.position = lhs.position - rhs.position;
     result.normal = lhs.normal - rhs.normal;
     result.texCoord = lhs.texCoord - rhs.texCoord;
@@ -35,15 +39,14 @@ VertexOut operator-(const VertexOut& lhs, const VertexOut& rhs) {
 
 VertexOut operator*(const VertexOut& vertex, float scalar) {
     VertexOut result;
+    result.rasterPosition = vertex.rasterPosition * scalar;
     result.position = vertex.position * scalar;
     result.normal = vertex.normal * scalar;
     result.texCoord = vertex.texCoord * scalar;
     return result;
 }
 
-VertexOut operator*(float scalar, const VertexOut& vertex) {
-    return vertex * scalar;  // 利用前面定义的乘法
-}
+VertexOut operator*(float scalar, const VertexOut& vertex) { return vertex * scalar; }
 
 RasterPipeline::RasterPipeline(const RasterDesc& desc, const CpuTexture::SharedPtr& pDepthTexture,
                                const CpuTexture::SharedPtr& pColorTexture)
@@ -81,9 +84,9 @@ void RasterPipeline::renderStats() const {
 
 static bool isFrontFace(const TrianglePrimitive& primitive) {
     // RHS
-    float3 forward = float3(0, 0, -1);
-    float3 v0v1 = primitive.v1.getPosition() - primitive.v0.getPosition();
-    float3 v0v2 = primitive.v2.getPosition() - primitive.v0.getPosition();
+    float3 forward = float3(0, 0, 1);
+    float3 v0v1 = primitive.v1.rasterPosition - primitive.v0.rasterPosition;
+    float3 v0v2 = primitive.v2.rasterPosition - primitive.v0.rasterPosition;
 
     float3 primForward = cross(v0v2, v0v1);
     // If the cross product points the opposite direction to forward, then front faced
@@ -99,18 +102,10 @@ static bool isFrontFace(const TrianglePrimitive& primitive) {
 //     }
 // }
 
-/** Clip the primitive and make homogeneous division.
+/** Clip the primitive.
  */
 static void clipPrimitive(TrianglePrimitive prim, tbb::concurrent_vector<TrianglePrimitive>& out) {
     // Clip space coordinates
-    float w = prim.v0.position.w;
-    if (w <= 0) {
-        return;
-    }
-    prim.v0.position /= w;
-    prim.v1.position /= w;
-    prim.v2.position /= w;
-
     out.push_back(prim);
     // std::vector<VertexOut> vertices{prim.v0, prim.v1, prim.v2};
     // Intersect the triangle with clip cube
@@ -125,12 +120,7 @@ tbb::concurrent_vector<TrianglePrimitive> RasterPipeline::executeVertexShader(co
     if (indexData.empty()) {
         tbb::parallel_for(0, (int)vertexData.size(), [&](int index) { vertexResult[index] = vertexShader(vertexData[index]); });
     } else {
-        tbb::parallel_for_each(indexData.begin(), indexData.end(), [&](uint32_t index) {
-            index = indexData[index];
-            VertexOut vOut = vertexShader(vertexData[index]);
-
-            vertexResult[index] = vOut;
-        });
+        tbb::parallel_for(0, (int)indexData.size(), [&](int i) { vertexResult[i] = vertexShader(vertexData[indexData[i]]); });
     }
 
     tbb::concurrent_vector<TrianglePrimitive> primitives;
@@ -138,14 +128,14 @@ tbb::concurrent_vector<TrianglePrimitive> RasterPipeline::executeVertexShader(co
 
     CullMode cullMode = mDesc.cullMode;
     auto cullFunc = [cullMode](bool frontFace) {
-        if (cullMode == CullMode::None) return true;
-        if ((cullMode == CullMode::FrontFace && !frontFace) || (cullMode == CullMode::BackFace && frontFace)) return true;
-        return false;
+        return (cullMode == CullMode::None) || (cullMode == CullMode::FrontFace && !frontFace) ||
+               (cullMode == CullMode::BackFace && frontFace);
     };
 
     tbb::parallel_for(0, (int)vertexResult.size() / 3, [&](int index) {
         TrianglePrimitive primitive;
         int vIndex = index * 3;
+        RASTERY_ASSERT(vIndex + 2 < int(vertexResult.size()));
         primitive.v0 = vertexResult[vIndex + 0];
         primitive.v1 = vertexResult[vIndex + 1];
         primitive.v2 = vertexResult[vIndex + 2];
@@ -163,17 +153,19 @@ tbb::concurrent_vector<TrianglePrimitive> RasterPipeline::executeVertexShader(co
     return primitives;
 }
 
+static float3 clipToNDC(float4 clipCoord) { return clipCoord / clipCoord.w; }
+
 /** Convert from NDC((-1, -1, 0) - (1, 1, 1))
  * to screen space(0, 0) - (width, height)
  */
-static float2 ndcToScreenSpace(int width, int height, float3 ndcCoord) {
+static float2 ndcToViewport(int width, int height, float3 ndcCoord) {
     float2 pixel = float2(ndcCoord.x, -ndcCoord.y);
     pixel = pixel * float2(0.5) + float2(0.5);
     pixel *= float2(width, height);
     return float3(pixel, ndcCoord.z);
 }
 
-static bool isInsidePrimitive(float2 v0, float2 v1, float2 v2, float2 p, float3& barycentricCoord) {
+static float3 computeBarycentricCoordinate(float2 v0, float2 v1, float2 v2, float2 p) {
     float2 v0v1 = v1 - v0;
     float2 v0v2 = v2 - v0;
     float2 v0p = p - v0;
@@ -184,17 +176,18 @@ static bool isInsidePrimitive(float2 v0, float2 v1, float2 v2, float2 p, float3&
 
     float a = det_pv2 / det_v1v2;
     float b = det_v1p / det_v1v2;
-
-    barycentricCoord = float3(a, b, 1 - a - b);
-
-    return a > 0.0 && b > 0.0 && (a + b) < 1.0;
+    return float3(1 - a - b, a, b);
 }
+
+static bool isInsidePrimitive(float3 baryCoord) { return baryCoord.x >= 0 && baryCoord.y >= 0 && baryCoord.z >= 0 && baryCoord.z <= 1; }
+
 bool RasterPipeline::zbufferTest(float2 sample, float depth) {
-    float fragDepth = mpColorTexture->fetch<float>(uint2(sample));
-    bool passed = depth > fragDepth;
+    float fragDepth = mpDepthTexture->fetch<float>(uint2(sample));
+    bool passed = depth < fragDepth;
+
     if (passed) {
-        // RHS + ZO depth, the larger the closer
-        mpColorTexture->fetch<float>(uint2(sample)) = depth;
+        // RHS + ZO depth, the smaller the closer
+        mpDepthTexture->fetch<float>(uint2(sample)) = depth;
     }
     return passed;
 }
@@ -207,26 +200,30 @@ void RasterPipeline::executeRasterization(const tbb::concurrent_vector<TriangleP
     // Cull the pixels in screen space
     if (mDesc.rasterMode == RasterMode::Naive || mDesc.rasterMode == RasterMode::ScanLine) {
         for (const auto& primitive : primitives) {
-            float2 v[3];
-            v[0] = ndcToScreenSpace(width, height, primitive.v0.getPosition());
-            v[1] = ndcToScreenSpace(width, height, primitive.v1.getPosition());
-            v[2] = ndcToScreenSpace(width, height, primitive.v2.getPosition());
+            std::array<float2, 3> vpCrd;
+            vpCrd[0] = ndcToViewport(width, height, clipToNDC(primitive.v0.rasterPosition));
+            vpCrd[1] = ndcToViewport(width, height, clipToNDC(primitive.v1.rasterPosition));
+            vpCrd[2] = ndcToViewport(width, height, clipToNDC(primitive.v2.rasterPosition));
 
             auto rasterizePoint = [&](int2 pixel) {
                 if (any(glm::lessThan(pixel, int2(0))) || any(glm::greaterThanEqual(pixel, int2(width, height)))) return;
 
                 float2 samplePoint = float2(pixel) + float2(0.5);
-                float3 baryCoord;
-                if (!isInsidePrimitive(v[0], v[1], v[2], samplePoint, baryCoord)) return;
+                float3 baryCoord = computeBarycentricCoordinate(vpCrd[0], vpCrd[1], vpCrd[2], samplePoint);
+                if (!isInsidePrimitive(baryCoord)) return;
 
-                // Interpolated fragment data
+                // Interpolated fragment data in clip space
+                // FIXME interpolate in linear space
                 VertexOut interpolateVertex = primitive.v0 * baryCoord.x + primitive.v1 * baryCoord.y + primitive.v2 * baryCoord.z;
+                interpolateVertex.rasterPosition = float4(clipToNDC(interpolateVertex.rasterPosition), interpolateVertex.rasterPosition.w);
 
-                if (!zbufferTest(samplePoint, interpolateVertex.position.z)) {
+                if (interpolateVertex.rasterPosition.z <= 0 || interpolateVertex.rasterPosition.z > 1 ||
+                    !zbufferTest(samplePoint, interpolateVertex.rasterPosition.z)) {
                     return;
                 }
 
-                mpColorTexture->fetch<float4>(pixel) = fragmentShader();
+                FragIn fragIn = interpolateVertex;
+                mpColorTexture->fetch<float4>(pixel) = fragmentShader(fragIn);
             };
 
             switch (mDesc.rasterMode) {
@@ -241,6 +238,7 @@ void RasterPipeline::executeRasterization(const tbb::concurrent_vector<TriangleP
 
                 } break;
                 case RasterMode::ScanLine: {
+                    std::array<float2, 3> v = vpCrd;
                     // Sort vertices by y
                     if (v[0].y > v[1].y) {
                         std::swap(v[0], v[1]);
@@ -289,7 +287,7 @@ void RasterPipeline::executeRasterization(const tbb::concurrent_vector<TriangleP
     }
     timer.end();
     mStats.drawCallCount++;
-    mStats.triangleCount += primitives.size();
+    mStats.triangleCount += (uint32_t)primitives.size();
     mStats.rasterizeTime += timer.elapsedMilliseconds();
 }
 

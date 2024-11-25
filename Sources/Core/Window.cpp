@@ -25,10 +25,21 @@ class ApiCallbacks {
         }
     }
 
-    static void handleKeyCallback(GLFWwindow* pGlfwWindow, int key, int _, int action, int mods) {
+    static void handleKeyEvent(GLFWwindow* pGlfwWindow, int key, int _, int action, int mods) {
         auto* pWindow = (Window*)glfwGetWindowUserPointer(pGlfwWindow);
         if (pWindow != nullptr) {
             pWindow->mpCallback->handleKeyEvent(key, action, mods);
+        }
+    }
+
+    static void handleFileDrop(GLFWwindow* pGlfwWindow, int pathCount, const char* paths[]) {
+        auto* pWindow = (Window*)glfwGetWindowUserPointer(pGlfwWindow);
+        if (pWindow != nullptr) {
+            std::vector<std::string> pathVector(pathCount);
+            for (int i = 0; i < pathCount; i++) {
+                pathVector[i] = paths[i];
+            }
+            pWindow->mpCallback->handleFileDrop(pathVector);
         }
     }
 };
@@ -64,9 +75,11 @@ Window::Window(const WindowDesc& desc, ICallback* pCallback) : mDesc(desc), mpCa
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     (void)io;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
     ImGui_ImplGlfw_InitForOpenGL(mpGlfwWindow, true);
-    ImGui_ImplOpenGL3_Init("#version 330");
+    ImGui_ImplGlfw_SetCallbacksChainForAllWindows(false);
+    ImGui_ImplOpenGL3_Init("#version 410");
 }
 
 void Window::resize(int width, int height) {
@@ -94,6 +107,7 @@ bool Window::shouldClose() const { return glfwWindowShouldClose(mpGlfwWindow) !=
 void Window::setCallbacks() {
     glfwSetWindowUserPointer(mpGlfwWindow, this);
     glfwSetFramebufferSizeCallback(mpGlfwWindow, &ApiCallbacks::handleFrameBufferResize);
-    glfwSetKeyCallback(mpGlfwWindow, &ApiCallbacks::handleKeyCallback);
+    glfwSetKeyCallback(mpGlfwWindow, &ApiCallbacks::handleKeyEvent);
+    glfwSetDropCallback(mpGlfwWindow, &ApiCallbacks::handleFileDrop);
 }
 }  // namespace Rastery

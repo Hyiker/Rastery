@@ -32,3 +32,11 @@ CPMAddPackage(
     "TBB_TEST OFF"
     "BUILD_SHARED_LIBS ON"
 )
+
+# assimp
+CPMAddPackage(
+    NAME assimp
+    URL "https://github.com/assimp/assimp/archive/refs/tags/v5.4.3.tar.gz"
+    OPTIONS
+    "BUILD_SHARED_LIBS ON"
+)

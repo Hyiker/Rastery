@@ -4,6 +4,7 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 
+#include <filesystem>
 #include <memory>
 #include <string>
 
@@ -86,9 +87,9 @@ App::App() {
     mpCamera = std::make_shared<Camera>();
 
     handleFrameBufferResize(desc.width, desc.height);
-
-    mpWindow->beginLoop();
 }
+
+void App::run() const { mpWindow->beginLoop(); }
 
 void App::handleFrameBufferResize(int width, int height) {
     // Resize present texture
@@ -157,27 +158,9 @@ void App::handleRenderFrame() {
 
 void App::executeRasterizer() const {
     mRasterizer.mpColorTexture->clear(float4(0, 0, 0, 0));
-    mRasterizer.mpDepthTexture->clear(float4(0));
+    mRasterizer.mpDepthTexture->clear(float4(1.f));
 
-    CpuVao vao0;
-    {
-        vao0.indexData = {};
-        Vertex v0, v1, v2;
-        v0.position = float3(0, 0.3, 0);
-        v1.position = float3(-0.5, -0.3, 0);
-        v2.position = float3(0.5, -0.7, 0);
-        vao0.vertexData = {v0, v1, v2};
-    }
-
-    CpuVao vao1;
-    {
-        vao1.indexData = {};
-        Vertex v0, v1, v2;
-        v0.position = float3(0.3, 0.3, 0);
-        v1.position = float3(-0.3, -0.3, -0.1);
-        v2.position = float3(0.5, -0.7, 0.5);
-        vao1.vertexData = {v0, v1, v2};
-    }
+    if (!mpModelVao) return;
 
     CameraData data = mpCamera->getData();
 
@@ -186,18 +169,27 @@ void App::executeRasterizer() const {
 
     auto vertexShader = [&](Vertex v) {
         VertexOut out;
-        out.position = data.projViewMat * modelMatrix * float4(v.position, 1.f);
+        out.rasterPosition = data.projViewMat * modelMatrix * float4(v.position, 1.f);
+        out.position = modelMatrix * float4(v.position, 1.f);
         out.normal = float3(normalMatrix * float4(v.normal, 0.f));
         out.texCoord = v.texCoord;
         return out;
     };
 
-    auto fragmentShader0 = [&]() { return float4(1.f, 0.f, 0.f, 0.f); };
-    auto fragmentShader1 = [&]() { return float4(0.f, 0.f, 1.f, 0.f); };
+    auto normalShader = [](FragIn fragIn) {
+        float3 normal = fragIn.normal;
+        normal = normal * float3(0.5) + float3(0.5);
+        return float4(normal, 1.f);
+    };
+
+    auto depthShader = [&](FragIn fragIn) {
+        float depth = fragIn.rasterPosition.z;
+        float linearDepth = data.nearZ * data.farZ / (data.farZ + depth * (data.nearZ - data.farZ));
+        return float4(float3(linearDepth), 1.f);
+    };
 
     mRasterizer.mpPipeline->beginFrame();
-    mRasterizer.mpPipeline->draw(vao0, vertexShader, fragmentShader0);
-    mRasterizer.mpPipeline->draw(vao1, vertexShader, fragmentShader1);
+    mRasterizer.mpPipeline->draw(*mpModelVao, vertexShader, normalShader);
 }
 
 void App::blitFrameBuffer() const {
@@ -221,6 +213,32 @@ void App::blitFrameBuffer() const {
     RASTERY_CHECK_GL_ERROR();
 }
 
+void App::import(const std::filesystem::path& p) {
+    mpModelVao = createFromFile(p);
+    if (!mpModelVao) {
+        logError("Bad model file");
+    }
+    logInfo("Imported model from {}", p.string());
+
+    if ((mpModelVao->indexData.size() > 1000 || mpModelVao->vertexData.size() > 1000) &&
+        mRasterizer.mpPipeline->getRasterMode() == RasterMode::Naive) {
+        // Prevent heavy workload caused crash
+        mRasterizer.mpPipeline->setRasterMode(RasterMode::ScanLine);
+    }
+}
+
+void App::handleFileDrop(const std::vector<std::string>& paths) {
+    if (paths.empty()) {
+        logError("Empty path!");
+        return;
+    }
+    if (paths.size() != 1) {
+        logWarning("More than one file dragged in, using the first one");
+    }
+    std::filesystem::path p = paths[0];
+    import(p);
+}
+
 void App::handleKeyEvent(int key, int action, int mods) {
     if (key == GLFW_KEY_ESCAPE && action == GLFW_RELEASE) {
         mpWindow->shouldClose(true);
@@ -240,6 +258,10 @@ void App::renderUI() {
     if (ImGui::CollapsingHeader("Rasterizer", ImGuiTreeNodeFlags_DefaultOpen)) {
         // Pipeline
         mRasterizer.mpPipeline->renderUI();
+    }
+
+    if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
+        mpCamera->renderUI();
     }
 
     ImGui::End();

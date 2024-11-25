@@ -65,7 +65,7 @@ static int toSubresourceType(TextureFormat format) {
     RASTERY_UNREACHABLE();
 }
 
-constexpr int getFormatBytes(TextureFormat format) {
+int getFormatBytes(TextureFormat format) {
     switch (format) {
         case TextureFormat::Rgba8:
             return 4;

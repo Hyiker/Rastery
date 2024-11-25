@@ -11,7 +11,9 @@
 namespace Rastery {
 
 struct VertexOut {
-    float4 position;  ///< xyz = NDC coordinate, w keeps the original depth(before homogeneous division)
+    float4 rasterPosition;  ///< xyz = NDC coordinate, w keeps the original depth(before homogeneous division)
+
+    float3 position;  ///< User defined position
     float3 normal;
     float2 texCoord;
     [[nodiscard]] float3 getPosition() const { return position; }
@@ -22,8 +24,10 @@ struct VertexOut {
     friend VertexOut operator*(float scalar, const VertexOut& vertex);
 };
 
+using FragIn = VertexOut;
+
 using VertexShader = std::function<VertexOut(Vertex)>;
-using FragmentShader = std::function<float4()>;
+using FragmentShader = std::function<float4(const FragIn&)>;
 
 enum class CullMode { BackFace, FrontFace, None };
 
@@ -54,7 +58,7 @@ struct RasterDesc {
     int width;
     int height;
     CullMode cullMode = CullMode::None;
-    RasterMode rasterMode = RasterMode::ScanLine;
+    RasterMode rasterMode = RasterMode::Naive;
 };
 
 struct TrianglePrimitive {
@@ -66,13 +70,17 @@ struct TrianglePrimitive {
 class RASTERY_API RasterPipeline {
    public:
     struct Stats {
-        uint32_t triangleCount;  ///< Triangle primitive count.(after culling)
-        uint32_t drawCallCount;  ///< Time of draw call count.
-        float rasterizeTime;     ///< Rasterization time in ms.
+        uint32_t triangleCount = 0;  ///< Triangle primitive count.(after culling)
+        uint32_t drawCallCount = 0;  ///< Time of draw call count.
+        float rasterizeTime = 0;     ///< Rasterization time in ms.
     };
 
     using SharedPtr = std::shared_ptr<RasterPipeline>;
     RasterPipeline(const RasterDesc& desc, const CpuTexture::SharedPtr& pDepthTexture, const CpuTexture::SharedPtr& pColorTexture);
+
+    void setRasterMode(RasterMode mode) { mDesc.rasterMode = mode; }
+
+    RasterMode getRasterMode() const { return mDesc.rasterMode; }
 
     void beginFrame();
 

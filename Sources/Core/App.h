@@ -2,6 +2,7 @@
 #include "Camera.h"
 #include "Core/API/Shader.h"
 #include "Core/API/Texture.h"
+#include "Core/API/Vao.h"
 #include "Macros.h"
 #include "Raster/RasterPipeline.h"
 #include "Window.h"
@@ -10,12 +11,17 @@ class RASTERY_API App : public ICallback {
    public:
     App();
 
+    void import(const std::filesystem::path& p);
+
     void renderUI();
     void handleFrameBufferResize(int width, int height) override;
     void handleRenderFrame() override;
+    void handleFileDrop(const std::vector<std::string>& paths) override;
     void handleKeyEvent(int key, int action, int mods) override;
 
     ~App();
+
+    void run() const;
 
    private:
     void beginFrame();
@@ -31,6 +37,9 @@ class RASTERY_API App : public ICallback {
     uint32_t mVao;
     Texture::SharedPtr mpPresentTexture;
     ShaderProgram::SharedPtr mpPresentShader;
+
+    // Model
+    CpuVao::SharedPtr mpModelVao;
 
     // Rasterization pipeline
     struct {

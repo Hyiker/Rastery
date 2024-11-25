@@ -16,7 +16,7 @@ enum class TextureFilter { Nearest, Linear, MipMap, Count };
 
 enum class TextureFormat { Rgba8, Rgba32F, R32F, Count };
 
-constexpr int getFormatBytes(TextureFormat format);
+int getFormatBytes(TextureFormat format);
 
 struct TextureWrapDesc {
     TextureWrap wrapS = TextureWrap::Repeat;

@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "Core/Macros.h"
 struct GLFWwindow;
@@ -19,6 +20,7 @@ class RASTERY_API ICallback {
    public:
     virtual void handleRenderFrame() = 0;
     virtual void handleKeyEvent(int key, int action, int mods) = 0;
+    virtual void handleFileDrop(const std::vector<std::string>& paths) = 0;
     virtual void handleFrameBufferResize(int width, int height) = 0;
 };
 

@@ -30,6 +30,8 @@ class Camera {
 
     void computeCameraData();
 
+    void renderUI();
+
    private:
     mutable CameraData mData;
 };
