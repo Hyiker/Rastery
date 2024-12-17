@@ -1,5 +1,6 @@
 #pragma once
 #include "Camera.h"
+#include "CameraController.h"
 #include "Core/API/Shader.h"
 #include "Core/API/Texture.h"
 #include "Core/API/Vao.h"
@@ -18,6 +19,7 @@ class RASTERY_API App : public ICallback {
     void handleRenderFrame() override;
     void handleFileDrop(const std::vector<std::string>& paths) override;
     void handleKeyEvent(int key, int action, int mods) override;
+    void handleMouseEvent(const MouseEvent& event) override;
 
     ~App();
 
@@ -32,6 +34,7 @@ class RASTERY_API App : public ICallback {
 
     // Scene data
     Camera::SharedPtr mpCamera;
+    OrbiterCameraController::SharedPtr mpCameraControl;
 
     // Present states
     uint32_t mVao;

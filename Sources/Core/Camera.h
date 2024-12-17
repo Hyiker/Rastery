@@ -28,6 +28,10 @@ class Camera {
 
     void setAspectRatio(float value) { mData.aspectRatio = value; }
 
+    void setPositionWorld(float3 v) { mData.posW = v; }
+    
+    void setUpVec(float3 v) { mData.up = v; }
+
     void computeCameraData();
 
     void renderUI();

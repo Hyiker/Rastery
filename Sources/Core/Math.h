@@ -1,11 +1,14 @@
 #pragma once
-
 #include <fmt/format.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <glm/glm.hpp>
+
+#include "glm/fwd.hpp"
+
 #define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/quaternion.hpp>
 #include <glm/gtx/string_cast.hpp>
 #include <glm/matrix.hpp>
 #include <glm/trigonometric.hpp>
@@ -32,11 +35,18 @@ using float3x3 = glm::mat3x3;
 using float4x4 = glm::mat4x4;
 using float3x4 = glm::mat3x4;
 
+using quatf = glm::quat;
+
 inline float3 cross(const float3& v0, const float3& v1) { return glm::cross(v0, v1); }
 
 template <typename T>
 float dot(const T& v0, const T& v1) {
     return glm::dot(v0, v1);
+}
+
+template <typename T>
+float absDot(const T& v0, const T& v1) {
+    return glm::abs(glm::dot(v0, v1));
 }
 
 template <typename T>
@@ -112,5 +122,17 @@ template <typename T>
 T inverse(T mat) {
     return glm::inverse(mat);
 }
+
+/** Convert Y-up unit vector to spherical coordinate(theta-phi).
+ */
+float2 toSpherical(const float3& v);
+
+/** Convert a spherical coordinate(theta-phi) to Y-up unit vector.
+ */
+float3 toCartesian(const float2& tp);
+
+quatf quatFromRotationBetweenVectors(float3 orig, float3 dest);
+
+float3x3 matrixFromQuat(const quatf& q);
 
 }  // namespace Rastery

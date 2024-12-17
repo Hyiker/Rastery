@@ -57,8 +57,8 @@ struct RasterDesc {
     // We actually mixup framebuffer and raster state here
     int width;
     int height;
-    CullMode cullMode = CullMode::None;
-    RasterMode rasterMode = RasterMode::Naive;
+    CullMode cullMode = CullMode::BackFace;
+    RasterMode rasterMode = RasterMode::ScanLine;
 };
 
 struct TrianglePrimitive {

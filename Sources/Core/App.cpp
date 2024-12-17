@@ -5,11 +5,13 @@
 #include <imgui_impl_opengl3.h>
 
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <string>
 
 #include "API/Shader.h"
 #include "Camera.h"
+#include "CameraController.h"
 #include "Core/API/Shader.h"
 #include "Core/API/Texture.h"
 #include "Core/API/Vao.h"
@@ -85,6 +87,7 @@ App::App() {
 
     // Create scene data
     mpCamera = std::make_shared<Camera>();
+    mpCameraControl = std::make_shared<OrbiterCameraController>(mpCamera);
 
     handleFrameBufferResize(desc.width, desc.height);
 }
@@ -165,7 +168,7 @@ void App::executeRasterizer() const {
     CameraData data = mpCamera->getData();
 
     auto modelMatrix = float4x4(1.f);
-    auto normalMatrix = transpose(inverse(data.viewMat * modelMatrix));
+    auto normalMatrix = transpose(inverse(modelMatrix));
 
     auto vertexShader = [&](Vertex v) {
         VertexOut out;
@@ -225,6 +228,19 @@ void App::import(const std::filesystem::path& p) {
         // Prevent heavy workload caused crash
         mRasterizer.mpPipeline->setRasterMode(RasterMode::ScanLine);
     }
+
+    float3 minPoint(std::numeric_limits<float>::max()), maxPoint(std::numeric_limits<float>::min());
+
+    for (const auto& vert : mpModelVao->vertexData) {
+        minPoint = glm::min(minPoint, vert.position);
+        maxPoint = glm::max(maxPoint, vert.position);
+    }
+
+    float3 center = (minPoint + maxPoint) / 2.f;
+    float radius = length(maxPoint - minPoint) / 2.f;
+
+    mpCameraControl->setModelParams(center, radius);
+    mpCameraControl->update();
 }
 
 void App::handleFileDrop(const std::vector<std::string>& paths) {
@@ -240,9 +256,16 @@ void App::handleFileDrop(const std::vector<std::string>& paths) {
 }
 
 void App::handleKeyEvent(int key, int action, int mods) {
+    auto& io = ImGui::GetIO();
+    if (io.WantCaptureKeyboard) return;
+
     if (key == GLFW_KEY_ESCAPE && action == GLFW_RELEASE) {
         mpWindow->shouldClose(true);
     }
+}
+void App::handleMouseEvent(const MouseEvent& event) {
+    mpCameraControl->onMouseEvent(event);
+    mpCameraControl->update();
 }
 
 void App::renderUI() {
