@@ -41,13 +41,13 @@ RASTERY_ENUM_REGISTER(CullMode)
 
 enum class RasterMode {
     Naive,     ///< Very slow
-    ScanLine,  ///< Use scoped scan line for each triangle
+    BoundedNaive,  ///< Use scoped scan line for each triangle
     Hierarchy  ///< Hierarchy z-buffer
 };
 
 RASTERY_ENUM_INFO(RasterMode, {
                                   {RasterMode::Naive, "Naive"},
-                                  {RasterMode::ScanLine, "ScanLine"},
+                                  {RasterMode::BoundedNaive, "BoundedNaive"},
                                   {RasterMode::Hierarchy, "Hierarchy"},
                               })
 
@@ -58,7 +58,7 @@ struct RasterDesc {
     int width;
     int height;
     CullMode cullMode = CullMode::BackFace;
-    RasterMode rasterMode = RasterMode::ScanLine;
+    RasterMode rasterMode = RasterMode::BoundedNaive;
 };
 
 struct TrianglePrimitive {

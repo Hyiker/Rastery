@@ -82,15 +82,17 @@ void RasterPipeline::renderStats() const {
     ImGui::Text("%s", ss.str().c_str());
 }
 
-static bool isFrontFace(const TrianglePrimitive& primitive) {
-    // RHS
-    float3 forward = float3(0, 0, 1);
-    float3 v0v1 = primitive.v1.rasterPosition - primitive.v0.rasterPosition;
-    float3 v0v2 = primitive.v2.rasterPosition - primitive.v0.rasterPosition;
+static float3 clipToNDC(float4 clipCoord) { return clipCoord / clipCoord.w; }
 
-    float3 primForward = cross(v0v2, v0v1);
+static bool isClockwise(const TrianglePrimitive& primitive) {
+    // RHS
+    // Check if the primitive is defined clockwise in homogeneous coordinates:
+    // https://en.wikipedia.org/wiki/Back-face_culling
+    float3 v0v1 = clipToNDC(primitive.v1.rasterPosition) - clipToNDC(primitive.v0.rasterPosition);
+    float3 v0v2 = clipToNDC(primitive.v2.rasterPosition) - clipToNDC(primitive.v0.rasterPosition);
+
     // If the cross product points the opposite direction to forward, then front faced
-    return dot(primForward, forward) < 0;
+    return (v0v1.x * v0v2.y - v0v2.x * v0v1.y) > 0.f;
 }
 
 // TODO static std::vector<VertexOut> clipVerticesWithPlane(const std::vector<VertexOut>& inVertices, float3 normal, float3 p) {
@@ -140,7 +142,7 @@ tbb::concurrent_vector<TrianglePrimitive> RasterPipeline::executeVertexShader(co
         primitive.v1 = vertexResult[vIndex + 1];
         primitive.v2 = vertexResult[vIndex + 2];
 
-        if (!cullFunc(isFrontFace(primitive))) {
+        if (!cullFunc(isClockwise(primitive))) {
             return;
         }
 
@@ -152,8 +154,6 @@ tbb::concurrent_vector<TrianglePrimitive> RasterPipeline::executeVertexShader(co
 
     return primitives;
 }
-
-static float3 clipToNDC(float4 clipCoord) { return clipCoord / clipCoord.w; }
 
 /** Convert from NDC((-1, -1, 0) - (1, 1, 1))
  * to screen space(0, 0) - (width, height)
@@ -198,7 +198,7 @@ void RasterPipeline::executeRasterization(const tbb::concurrent_vector<TriangleP
     int width = mDesc.width;
     int height = mDesc.height;
     // Cull the pixels in screen space
-    if (mDesc.rasterMode == RasterMode::Naive || mDesc.rasterMode == RasterMode::ScanLine) {
+    if (mDesc.rasterMode == RasterMode::Naive || mDesc.rasterMode == RasterMode::BoundedNaive) {
         for (const auto& primitive : primitives) {
             std::array<float2, 3> vpCrd;
             vpCrd[0] = ndcToViewport(width, height, clipToNDC(primitive.v0.rasterPosition));
@@ -237,9 +237,9 @@ void RasterPipeline::executeRasterization(const tbb::concurrent_vector<TriangleP
                     });
 
                 } break;
-                case RasterMode::ScanLine: {
+                case RasterMode::BoundedNaive: {
                     std::array<float2, 3> v = vpCrd;
-                    // Sort vertices by y
+                    // bubble sort vertices by y
                     if (v[0].y > v[1].y) {
                         std::swap(v[0], v[1]);
                     }
@@ -257,22 +257,40 @@ void RasterPipeline::executeRasterization(const tbb::concurrent_vector<TriangleP
                     // Ensure vMid on the right side
                     if (vMid.x < v[1].x) std::swap(vMid, v[1]);
 
+                    // The triangle should look like
+                    //      + v0
+                    //    +  +
+                    // v1+    + vMid
+                    //    +    +
+                    //      +   +
+                    //        +  +
+                    //           +  v2
+
                     // Upper triangle
-                    tbb::parallel_for(0, (int)std::ceil(upperHeight), [&](int yOffset) {
+                    // 3.5 - 0.5 produce 3.0, compensate it
+                    int yCnt = std::ceil(v[1].y) - std::floor(v[0].y);
+                    tbb::parallel_for(0, yCnt, [&](int yOffset) {
                         float y = std::floor(v[0].y) + float(yOffset);
-                        float xLeft = std::floor(std::lerp(v[0].x, v[1].x, (y + 1 - v[0].y) / upperHeight));
-                        float xRight = std::ceil(std::lerp(v[0].x, vMid.x, (y + 1 - v[0].y) / upperHeight));
-                        for (float x = xLeft; x <= xRight; x += 1.f) {
+                        // (y - y2) / (y1 - y2) = (x - x2) / (x1 - x2)
+                        auto xLeft = (int)std::floor(std::min((y - v[1].y) / (v[0].y - v[1].y) * (v[0].x - v[1].x) + v[1].x,
+                                                              (y + 1.f - v[1].y) / (v[0].y - v[1].y) * (v[0].x - v[1].x) + v[1].x));
+                        auto xRight = (int)std::ceil(std::max((y - vMid.y) / (v[0].y - vMid.y) * (v[0].x - vMid.x) + vMid.x,
+                                                              (y + 1.f - vMid.y) / (v[0].y - vMid.y) * (v[0].x - vMid.x) + vMid.x));
+                        for (int x = xLeft; x <= xRight; x++) {
                             rasterizePoint(int2(x, y));
                         }
                     });
 
                     // Lower triangle
-                    tbb::parallel_for(0, (int)std::ceil(lowerHeight), [&](int yOffset) {
+                    yCnt = std::ceil(v[2].y) - std::floor(v[1].y);
+                    tbb::parallel_for(0, yCnt, [&](int yOffset) {
                         float y = std::floor(v[1].y) + float(yOffset);
-                        float xLeft = std::floor(std::lerp(v[1].x, v[2].x, (y - v[1].y - 1) / lowerHeight));
-                        float xRight = std::ceil(std::lerp(vMid.x, v[2].x, (y - vMid.y - 1) / lowerHeight));
-                        for (float x = xLeft; x <= xRight; x += 1.f) {
+                        auto xLeft = (int)std::floor(std::min((y - v[2].y) / (v[1].y - v[2].y) * (v[1].x - v[2].x) + v[2].x,
+                                                              (y + 1.f - v[2].y) / (v[1].y - v[2].y) * (v[1].x - v[2].x) + v[2].x));
+                        auto xRight = (int)std::ceil(std::max((y - v[2].y) / (vMid.y - v[2].y) * (vMid.x - v[2].x) + v[2].x,
+                                                              (y + 1.f - v[2].y) / (vMid.y - v[2].y) * (vMid.x - v[2].x) + v[2].x));
+
+                        for (int x = xLeft; x <= xRight; x++) {
                             rasterizePoint(int2(x, y));
                         }
                     });

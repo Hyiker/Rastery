@@ -226,7 +226,7 @@ void App::import(const std::filesystem::path& p) {
     if ((mpModelVao->indexData.size() > 1000 || mpModelVao->vertexData.size() > 1000) &&
         mRasterizer.mpPipeline->getRasterMode() == RasterMode::Naive) {
         // Prevent heavy workload caused crash
-        mRasterizer.mpPipeline->setRasterMode(RasterMode::ScanLine);
+        mRasterizer.mpPipeline->setRasterMode(RasterMode::BoundedNaive);
     }
 
     float3 minPoint(std::numeric_limits<float>::max()), maxPoint(std::numeric_limits<float>::min());
