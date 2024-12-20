@@ -2,6 +2,7 @@
 
 #include <glad.h>
 
+#include <bit>
 #include <cstdint>
 #include <span>
 
@@ -150,6 +151,16 @@ void CpuTexture::clear(float4 color) {
             RASTERY_UNREACHABLE();
         } break;
     }
+}
+
+int computeMipMpaLevels(uint32_t width, uint32_t height) {
+    int n = 0;
+    while (width || height) {
+        n++;
+        width >>= 1;
+        height >>= 1;
+    }
+    return n;
 }
 
 }  // namespace Rastery

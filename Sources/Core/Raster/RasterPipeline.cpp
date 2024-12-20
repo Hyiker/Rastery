@@ -23,6 +23,7 @@
 #include "Utils/Gui.h"
 #include "Utils/Logger.h"
 #include "Utils/Timer.h"
+#include "imgui.h"
 
 namespace Rastery {
 
@@ -64,10 +65,16 @@ void RasterPipeline::beginFrame() {
     mStats.drawCallCount = 0;
     mStats.triangleCount = 0;
     mStats.rasterizeTime = 0.f;
+    mStats.hiZCullCount = 0u;
 }
 
 void RasterPipeline::draw(const CpuVao& vao, VertexShader vertexShader, FragmentShader fragmentShader) {
     auto primitives = executeVertexShader(vao, vertexShader);
+
+    std::sort(primitives.begin(), primitives.end(), [](const TrianglePrimitive& p0, const TrianglePrimitive& p1) {
+        return std::min({p0.v0.rasterPosition.z, p0.v1.rasterPosition.z, p0.v2.rasterPosition.z}) <
+               std::min({p1.v0.rasterPosition.z, p1.v1.rasterPosition.z, p1.v2.rasterPosition.z});
+    });
 
     executeRasterization(primitives, fragmentShader);
 }
@@ -76,6 +83,10 @@ void RasterPipeline::renderUI() {
 
     dropdown("Raster Mode", mDesc.rasterMode);
 
+    ImGui::Checkbox("Enable Hi-Z", &mDesc.useHierarchicalZBuffer);
+    if (useHiZ()) {
+        ImGui::Checkbox("Enable acceleration for Hi-Z", &mDesc.useAccelerationStructure);
+    }
     renderStats();
 }
 
@@ -84,7 +95,7 @@ void RasterPipeline::renderStats() const {
 
     ss << "Statistics:\n"
        << fmt::format("Rasterize time: {:.2f}ms\n", mStats.rasterizeTime) << "Draw call count: " << mStats.drawCallCount
-       << "\nTriangle count: " << mStats.triangleCount;
+       << "\nTriangle count: " << mStats.triangleCount << "\nHiZ cull count: " << mStats.hiZCullCount;
 
     ImGui::Text("%s", ss.str().c_str());
 }
@@ -164,9 +175,9 @@ tbb::concurrent_vector<TrianglePrimitive> RasterPipeline::executeVertexShader(co
 }
 
 /** Convert from NDC((-1, -1, 0) - (1, 1, 1))
- * to screen space(0, 0) - (width, height)
+ * to screen space(0, 0) - (width, height) with original depth in NDC
  */
-static float2 ndcToViewport(int width, int height, float3 ndcCoord) {
+static float3 ndcToViewport(int width, int height, float3 ndcCoord) {
     float2 pixel = float2(ndcCoord.x, -ndcCoord.y);
     pixel = pixel * float2(0.5) + float2(0.5);
     pixel *= float2(width, height);
@@ -189,18 +200,77 @@ static float3 computeBarycentricCoordinate(float2 v0, float2 v1, float2 v2, floa
 
 static bool isInsidePrimitive(float3 baryCoord) { return baryCoord.x >= 0 && baryCoord.y >= 0 && baryCoord.z >= 0 && baryCoord.z <= 1; }
 
-bool RasterPipeline::zbufferTest(float2 sample, float depth) {
-    float fragDepth = mpDepthTexture->fetch<float>(uint2(sample));
+static std::pair<uint2, uint2> computeScreenSpaceBound(std::span<const float3> points, int width, int height) {
+    int2 rangeMin(width - 1, height - 1), rangeMax(0, 0);
+    for (int i = 0; i < points.size(); i++) {
+        rangeMin = glm::min(rangeMin, (int2)glm::floor(points[i]));
+        rangeMax = glm::max(rangeMax, (int2)glm::ceil(points[i]));
+    }
+    rangeMin = glm::clamp(rangeMin, int2(0), int2(width - 1, height - 1));
+    rangeMax = glm::clamp(rangeMax, int2(0), int2(width - 1, height - 1));
+    return {(uint2)rangeMin, (uint2)rangeMax};
+}
+
+bool RasterPipeline::earlyHiZBufferTest(std::span<const float3, 3> viewportCrd) const {
+    RASTERY_ASSERT(!mHiZDepthTextures.empty());
+    float3 closest =
+        *std::min_element(viewportCrd.begin(), viewportCrd.end(), [](const float3& v0, const float3& v1) { return v0.z < v1.z; });
+    float2 uv = float2(closest.x, closest.y);
+    uv /= float2(mDesc.width, mDesc.height);
+    uv = clamp(uv, float2(0.0), float2(1.0));
+    // paramid top-down z test
+    auto [minP, maxP] = computeScreenSpaceBound(viewportCrd, mDesc.width, mDesc.height);
+    int i = mHiZDepthTextures.size() - 1;
+    for (auto it = mHiZDepthTextures.rbegin(); it != mHiZDepthTextures.rend(); it++, i--) {
+        float fragFurthest = 0.5;
+        const auto& pTex = *it;
+        uint2 layerMinP = minP >> uint2(i);
+        uint2 layerMaxP = glm::max(maxP >> uint2(i), uint2(1));
+        for (uint32_t y = layerMinP.y; y <= layerMaxP.y; y++) {
+            for (uint32_t x = layerMinP.x; x <= layerMaxP.x; x++) {
+                fragFurthest = std::max(fragFurthest, (float)pTex->fetchClamped<float>(uint2(x, y)));
+            }
+        }
+        if (fragFurthest < closest.z) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void RasterPipeline::cascadeUpdateHiZBuffer(std::pair<uint2, uint2> range) {
+    uint2 minP = range.first / 2u, maxP = range.second / 2u;
+    for (int i = 1; i < mHiZDepthTextures.size(); i++) {
+        auto pCurTex = mHiZDepthTextures[i];
+        auto pLastTex = mHiZDepthTextures[i - 1];
+        for (uint32_t y = minP.y; y <= maxP.y; y++) {
+            for (uint32_t x = minP.x; x <= maxP.x; x++) {
+                uint2 xyLast(x << 1, y << 1);
+                float z0 = pLastTex->fetchClamped<float>(xyLast);
+                float z1 = pLastTex->fetchClamped<float>(xyLast + uint2(0, 1));
+                float z2 = pLastTex->fetchClamped<float>(xyLast + uint2(1, 0));
+                float z3 = pLastTex->fetchClamped<float>(xyLast + uint2(1, 1));
+                pCurTex->fetch<float>(uint2(x, y)) = std::max({z0, z1, z2, z3});
+                minP >>= uint2(1);
+                maxP >>= uint2(1);
+            }
+        }
+    }
+}
+
+bool RasterPipeline::zBufferTest(float2 sample, float depth) {
+    uint2 xy = uint2(sample);
+    float fragDepth = mpDepthTexture->fetch<float>(xy);
     bool passed = depth < fragDepth;
 
     if (passed) {
         // RHS + ZO depth, the smaller the closer
-        mpDepthTexture->fetch<float>(uint2(sample)) = depth;
+        mpDepthTexture->fetch<float>(xy) = depth;
     }
     return passed;
 }
 
-void RasterPipeline::rasterizePoint(int2 pixel, std::span<const float2, 3> viewportCrds, const TrianglePrimitive& primitive,
+void RasterPipeline::rasterizePoint(int2 pixel, std::span<const float3, 3> viewportCrds, const TrianglePrimitive& primitive,
                                     FragmentShader fragmentShader, RasterizerDebugData* pDebugData) {
     int width = mDesc.width;
     int height = mDesc.height;
@@ -218,7 +288,7 @@ void RasterPipeline::rasterizePoint(int2 pixel, std::span<const float2, 3> viewp
     interpolateVertex.rasterPosition = float4(clipToNDC(interpolateVertex.rasterPosition), interpolateVertex.rasterPosition.w);
 
     if (interpolateVertex.rasterPosition.z <= 0 || interpolateVertex.rasterPosition.z > 1 ||
-        !zbufferTest(samplePoint, interpolateVertex.rasterPosition.z)) {
+        !zBufferTest(samplePoint, interpolateVertex.rasterPosition.z)) {
         return;
     }
 
@@ -231,18 +301,66 @@ void RasterPipeline::rasterizePoint(int2 pixel, std::span<const float2, 3> viewp
     mpColorTexture->fetch<float4>(pixel) = fragmentShader(fragIn, context);
 }
 
+void RasterPipeline::prepareRasterization() {
+    if (useHiZ() && mpDepthTexture) {
+        // Create Hi-Z buffers
+        const auto& baseDesc = mpDepthTexture->getDesc();
+        int width = baseDesc.width, height = baseDesc.height;
+        RASTERY_ASSERT(width >= 0 && height >= 0);
+        int level = computeMipMpaLevels(width, height);
+        if (mHiZDepthTextures.size() < level) {
+            mHiZDepthTextures.resize(level);
+        }
+
+        mHiZDepthTextures[0] = mpDepthTexture;
+        width >>= 1;
+        height >>= 1;
+        bool hizRecreated = false;
+        for (int i = 1; i < level; i++) {
+            if (mHiZDepthTextures[i] == nullptr || mHiZDepthTextures[i]->getDesc().width != width ||
+                mHiZDepthTextures[i]->getDesc().height != height) {
+                TextureDesc desc = baseDesc;
+                desc.width = width;
+                desc.height = height;
+
+                mHiZDepthTextures[i] = std::make_shared<CpuTexture>(desc);
+                hizRecreated = true;
+            }
+            width >>= 1;
+            height >>= 1;
+        }
+
+        if (hizRecreated) {
+            logInfo("Recreating Hi-Z buffers");
+        }
+
+        // Clear Z buffers
+        float clearColor = mpDepthTexture->fetch<float>(0, 0);
+        for (int i = 1; i < level; i++) {
+            mHiZDepthTextures[i]->clear(float4(clearColor));
+        }
+    }
+}
+
 void RasterPipeline::executeRasterization(const tbb::concurrent_vector<TrianglePrimitive>& primitives, FragmentShader fragmentShader) {
     Timer timer;
 
     int width = mDesc.width;
     int height = mDesc.height;
+
+    prepareRasterization();
     // Cull the pixels in screen space
     if (mDesc.rasterMode == RasterMode::Naive || mDesc.rasterMode == RasterMode::BoundedNaive) {
         for (const auto& primitive : primitives) {
-            std::array<float2, 3> vpCrd;
+            std::array<float3, 3> vpCrd;
             vpCrd[0] = ndcToViewport(width, height, clipToNDC(primitive.v0.rasterPosition));
             vpCrd[1] = ndcToViewport(width, height, clipToNDC(primitive.v1.rasterPosition));
             vpCrd[2] = ndcToViewport(width, height, clipToNDC(primitive.v2.rasterPosition));
+
+            if (useHiZ() && !earlyHiZBufferTest(vpCrd)) {
+                mStats.hiZCullCount++;
+                continue;
+            }
 
             switch (mDesc.rasterMode) {
                 case RasterMode::Naive: {
@@ -257,7 +375,7 @@ void RasterPipeline::executeRasterization(const tbb::concurrent_vector<TriangleP
                 } break;
                 case RasterMode::BoundedNaive: {
                     // Create a copy of vpCrd for sorting
-                    std::array<float2, 3> v = vpCrd;
+                    std::array<float2, 3> v = {vpCrd[0], vpCrd[1], vpCrd[2]};
                     // bubble sort vertices by y
                     sort3(v[0], v[1], v[2], [](const float2& v1, const float2& v2) { return v1.y < v2.y; });
 
@@ -310,6 +428,17 @@ void RasterPipeline::executeRasterization(const tbb::concurrent_vector<TriangleP
                     RASTERY_UNREACHABLE();
                 };
             }
+
+            if (useHiZ()) {
+                int2 rangeMin(width, height), rangeMax(0, 0);
+                for (int i = 0; i < 3; i++) {
+                    rangeMin = glm::min(rangeMin, (int2)glm::floor(vpCrd[i]));
+                    rangeMax = glm::max(rangeMax, (int2)glm::ceil(vpCrd[i]));
+                }
+                rangeMin = glm::clamp(rangeMin, int2(0), int2(width - 1, height - 1));
+                rangeMax = glm::clamp(rangeMax, int2(0), int2(width - 1, height - 1));
+                cascadeUpdateHiZBuffer(computeScreenSpaceBound(vpCrd, width, height));
+            }
         }
     } else if (mDesc.rasterMode == RasterMode::ScanLineZBuffer) {
         scanlineZBuffer(primitives, fragmentShader);
@@ -323,7 +452,7 @@ void RasterPipeline::executeRasterization(const tbb::concurrent_vector<TriangleP
 
 struct PrimitiveItem {
     const TrianglePrimitive* pPrimitive;
-    std::array<float2, 3> vpCrd;  ///< view port coordinates for barycentric coordinate compute
+    std::array<float3, 3> vpCrd;  ///< view port coordinates for barycentric coordinate compute
     int dy;
 };
 
@@ -374,7 +503,7 @@ void RasterPipeline::scanlineZBuffer(const tbb::concurrent_vector<TrianglePrimit
     ClassifiedEdgeTable cet(height, {});
     // 1. Build classified polygon&edge table
     for (const TrianglePrimitive& primitive : primitives) {
-        std::array<float2, 3> vpCrd;
+        std::array<float3, 3> vpCrd;
         vpCrd[0] = ndcToViewport(width, height, clipToNDC(primitive.v0.rasterPosition));
         vpCrd[1] = ndcToViewport(width, height, clipToNDC(primitive.v1.rasterPosition));
         vpCrd[2] = ndcToViewport(width, height, clipToNDC(primitive.v2.rasterPosition));

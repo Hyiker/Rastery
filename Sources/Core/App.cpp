@@ -229,6 +229,7 @@ void App::blitFrameBuffer() const {
         subDesc.format = desc.format;
         subDesc.pData = mRasterizer.mpColorTexture->getPtr();
         mpPresentTexture->uploadData(subDesc);
+        RASTERY_CHECK_GL_ERROR();
     }
 
     glBindVertexArray(mVao);
@@ -320,7 +321,8 @@ void App::renderUI() {
         dropdown("Shader", mVisualizeMode);
     }
 
-    if (ImGui::CollapsingHeader("Pixel Debug", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (ImGui::CollapsingHeader("Pixel Debug", ImGuiTreeNodeFlags_DefaultOpen) &&
+        mRasterizer.mpPipeline->getRasterMode() == RasterMode::ScanLineZBuffer) {
         ImGui::Text("Pixel: (%d, %d)", mSelectedPixel.x, mSelectedPixel.y);
         std::string item0Str = fmt::format("Primitive ID: {}\n Start x: {}, dx: {}, dy: {}",
                                            mRasterizerDebugData.activeEdgePair[0].primitive.id, mRasterizerDebugData.activeEdgePair[0].x0,

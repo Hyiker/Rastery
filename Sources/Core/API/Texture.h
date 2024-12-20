@@ -108,8 +108,18 @@ class RASTERY_API CpuTexture {
     void* getPtr();
 
     template <typename T>
+    CpuTexelProxy<T> nearestFetch(float2 uv) {
+        return fetch<T>(uint2(uv * float2(mDesc.width - 1, mDesc.height - 1)));
+    }
+
+    template <typename T>
     CpuTexelProxy<T> fetch(uint2 xy) {
         return fetch<T>(xy.x, xy.y);
+    }
+
+    template <typename T>
+    CpuTexelProxy<T> fetchClamped(uint2 xy) {
+        return fetch<T>(glm::min(xy, uint2(mDesc.width - 1, mDesc.height - 1)));
     }
 
     template <typename T>
@@ -125,6 +135,8 @@ class RASTERY_API CpuTexture {
     TextureDesc mDesc;
     std::vector<unsigned char> mData;  ///< Texture data stored in row major.
 };
+
+int computeMipMpaLevels(uint32_t width, uint32_t height);
 
 template <typename T>
 CpuTexelProxy<T> CpuTexture::fetch(uint32_t x, uint32_t y) {

@@ -85,14 +85,12 @@ enum class RasterMode {
     Naive,            ///< Very slow
     BoundedNaive,     ///< Faster naive per primitive drawing
     ScanLineZBuffer,  ///< Scan line z-buffer with AET
-    HierarchyZBuffer  ///< Hierarchy z-buffer
 };
 
 RASTERY_ENUM_INFO(RasterMode, {
                                   {RasterMode::Naive, "Naive"},
                                   {RasterMode::BoundedNaive, "BoundedNaive"},
                                   {RasterMode::ScanLineZBuffer, "ScanLineZBuffer"},
-                                  {RasterMode::HierarchyZBuffer, "HierarchyZBuffer"},
                               })
 
 RASTERY_ENUM_REGISTER(RasterMode)
@@ -101,8 +99,11 @@ struct RasterDesc {
     // We actually mixup framebuffer and raster state here
     int width;
     int height;
-    CullMode cullMode = CullMode::None;
-    RasterMode rasterMode = RasterMode::ScanLineZBuffer;
+    CullMode cullMode = CullMode::BackFace;
+    RasterMode rasterMode = RasterMode::BoundedNaive;
+
+    bool useHierarchicalZBuffer = true;     ///< Enable HiZ for primitive culling
+    bool useAccelerationStructure = false;  ///< Enable spatial acceleration structure
 };
 
 class RASTERY_API RasterPipeline {
@@ -111,6 +112,8 @@ class RASTERY_API RasterPipeline {
         uint32_t triangleCount = 0;  ///< Triangle primitive count.(after culling)
         uint32_t drawCallCount = 0;  ///< Time of draw call count.
         float rasterizeTime = 0;     ///< Rasterization time in ms.
+
+        uint32_t hiZCullCount = 0;
     };
 
     using SharedPtr = std::shared_ptr<RasterPipeline>;
@@ -131,24 +134,36 @@ class RASTERY_API RasterPipeline {
 
     void renderUI();
 
+    bool useHiZ() const { return mDesc.useHierarchicalZBuffer && mDesc.rasterMode != RasterMode::ScanLineZBuffer; }
+
    private:
     Stats mStats;
+
     void renderStats() const;
 
-    bool zbufferTest(float2 sample, float depth);
+    bool earlyHiZBufferTest(std::span<const float3, 3> viewportCrd) const;
+
+    /** Down-top update hierarchical z-buffer pyramid in the range.
+     */
+    void cascadeUpdateHiZBuffer(std::pair<uint2, uint2> range);
+
+    bool zBufferTest(float2 sample, float depth);
 
     /** Vertex shader for projection misc.
      */
     [[nodiscard]] tbb::concurrent_vector<TrianglePrimitive> executeVertexShader(const CpuVao& vao, VertexShader vertexShader) const;
 
-    void rasterizePoint(int2 pixel, std::span<const float2, 3> viewportCrds, const TrianglePrimitive& primitive,
+    void rasterizePoint(int2 pixel, std::span<const float3, 3> viewportCrds, const TrianglePrimitive& primitive,
                         FragmentShader fragmentShader, RasterizerDebugData* pDebugData = nullptr);
+
+    void prepareRasterization();
 
     void executeRasterization(const tbb::concurrent_vector<TrianglePrimitive>& primitives, FragmentShader fragmentShader);
 
     void scanlineZBuffer(const tbb::concurrent_vector<TrianglePrimitive>& primitives, FragmentShader fragmentShader);
 
     RasterDesc mDesc;
+    std::vector<CpuTexture::SharedPtr> mHiZDepthTextures;
     CpuTexture::SharedPtr mpDepthTexture;
     CpuTexture::SharedPtr mpColorTexture;
 };
