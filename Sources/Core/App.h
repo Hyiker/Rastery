@@ -8,6 +8,17 @@
 #include "Raster/RasterPipeline.h"
 #include "Window.h"
 namespace Rastery {
+
+enum class VisualizeMode { Normal, PseudoPrimitiveColor, Depth };
+
+RASTERY_ENUM_INFO(VisualizeMode, {
+                                     {VisualizeMode::Normal, "Normal"},
+                                     {VisualizeMode::PseudoPrimitiveColor, "PseudoPrimitiveColor"},
+                                     {VisualizeMode::Depth, "Depth"},
+                                 })
+
+RASTERY_ENUM_REGISTER(VisualizeMode)
+
 class RASTERY_API App : public ICallback {
    public:
     App();
@@ -28,7 +39,7 @@ class RASTERY_API App : public ICallback {
    private:
     void beginFrame();
 
-    void executeRasterizer() const;
+    void executeRasterizer();
 
     void blitFrameBuffer() const;
 
@@ -53,7 +64,12 @@ class RASTERY_API App : public ICallback {
 
     Window::SharedPtr mpWindow;
 
+    // Params
+    VisualizeMode mVisualizeMode = VisualizeMode::PseudoPrimitiveColor;
+    int2 mSelectedPixel = int2(-1, -1);
+
     // Statistics
+    RasterizerDebugData mRasterizerDebugData;
     uint32_t mFrameCount = 0u;
 };
 }  // namespace Rastery

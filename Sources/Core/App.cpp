@@ -12,6 +12,7 @@
 #include "API/Shader.h"
 #include "Camera.h"
 #include "CameraController.h"
+#include "Color.h"
 #include "Core/API/Shader.h"
 #include "Core/API/Texture.h"
 #include "Core/API/Vao.h"
@@ -20,6 +21,7 @@
 #include "Error.h"
 #include "GlfwInclude.h"
 #include "Raster/RasterPipeline.h"
+#include "Utils/Gui.h"
 #include "Utils/Image.h"
 #include "Utils/Logger.h"
 #include "fmt/format.h"
@@ -90,6 +92,8 @@ App::App() {
     mpCameraControl = std::make_shared<OrbiterCameraController>(mpCamera);
 
     handleFrameBufferResize(desc.width, desc.height);
+
+    mpModelVao = CpuVao::createTriangle();
 }
 
 void App::run() const { mpWindow->beginLoop(); }
@@ -159,7 +163,7 @@ void App::handleRenderFrame() {
     mFrameCount++;
 }
 
-void App::executeRasterizer() const {
+void App::executeRasterizer() {
     mRasterizer.mpColorTexture->clear(float4(0, 0, 0, 0));
     mRasterizer.mpDepthTexture->clear(float4(1.f));
 
@@ -179,20 +183,39 @@ void App::executeRasterizer() const {
         return out;
     };
 
-    auto normalShader = [](FragIn fragIn) {
-        float3 normal = fragIn.normal;
-        normal = normal * float3(0.5) + float3(0.5);
-        return float4(normal, 1.f);
-    };
+    FragmentShader fragShader;
 
-    auto depthShader = [&](FragIn fragIn) {
-        float depth = fragIn.rasterPosition.z;
-        float linearDepth = data.nearZ * data.farZ / (data.farZ + depth * (data.nearZ - data.farZ));
-        return float4(float3(linearDepth), 1.f);
-    };
+    switch (mVisualizeMode) {
+        case VisualizeMode::Depth: {
+            fragShader = [&](FragIn fragIn, const GraphicsContextData& context) {
+                float depth = fragIn.rasterPosition.z;
+                float linearDepth = data.nearZ * data.farZ / (data.farZ + depth * (data.nearZ - data.farZ));
+                return float4(float3(linearDepth), 1.f);
+            };
+        } break;
+
+        case VisualizeMode::Normal: {
+            fragShader = [](FragIn fragIn, const GraphicsContextData& context) {
+                float3 normal = fragIn.normal;
+                normal = normal * float3(0.5) + float3(0.5);
+                return float4(normal, 1.f);
+            };
+        } break;
+
+        case VisualizeMode::PseudoPrimitiveColor: {
+            fragShader = [&](FragIn fragIn, const GraphicsContextData& context) {
+                if (mSelectedPixel == int2(context.sampleCrd)) {
+                    mRasterizerDebugData = context.debugData;
+                }
+
+                return float4(pseudoColor(context.primitiveId), 1.f);
+            };
+        } break;
+    }
 
     mRasterizer.mpPipeline->beginFrame();
-    mRasterizer.mpPipeline->draw(*mpModelVao, vertexShader, normalShader);
+
+    mRasterizer.mpPipeline->draw(*mpModelVao, vertexShader, fragShader);
 }
 
 void App::blitFrameBuffer() const {
@@ -264,8 +287,14 @@ void App::handleKeyEvent(int key, int action, int mods) {
     }
 }
 void App::handleMouseEvent(const MouseEvent& event) {
+    auto& io = ImGui::GetIO();
+    if (io.WantCaptureMouse || io.WantSetMousePos) return;
     mpCameraControl->onMouseEvent(event);
     mpCameraControl->update();
+
+    if (event.type == MouseEvent::Type::ButtonDown) {
+        mSelectedPixel = event.screenPos;
+    }
 }
 
 void App::renderUI() {
@@ -285,6 +314,23 @@ void App::renderUI() {
 
     if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
         mpCamera->renderUI();
+    }
+
+    if (ImGui::CollapsingHeader("Render", ImGuiTreeNodeFlags_DefaultOpen)) {
+        dropdown("Shader", mVisualizeMode);
+    }
+
+    if (ImGui::CollapsingHeader("Pixel Debug", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Text("Pixel: (%d, %d)", mSelectedPixel.x, mSelectedPixel.y);
+        std::string item0Str = fmt::format("Primitive ID: {}\n Start x: {}, dx: {}, dy: {}",
+                                           mRasterizerDebugData.activeEdgePair[0].primitive.id, mRasterizerDebugData.activeEdgePair[0].x0,
+                                           mRasterizerDebugData.activeEdgePair[0].dx, mRasterizerDebugData.activeEdgePair[0].dy);
+
+        std::string item1Str = fmt::format("Primitive ID: {}\n Start x: {}, dx: {}, dy: {}",
+                                           mRasterizerDebugData.activeEdgePair[1].primitive.id, mRasterizerDebugData.activeEdgePair[1].x0,
+                                           mRasterizerDebugData.activeEdgePair[1].dx, mRasterizerDebugData.activeEdgePair[1].dy);
+        ImGui::Text("Edge item 0:\n%s", item0Str.c_str());
+        ImGui::Text("Edge item 1:\n%s", item1Str.c_str());
     }
 
     ImGui::End();

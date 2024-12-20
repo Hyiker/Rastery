@@ -1,21 +1,28 @@
 #include "RasterPipeline.h"
 
+#include <Utils/Algorithms.h>
 #include <tbb/blocked_range2d.h>
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_for_each.h>
 
+#include <algorithm>
 #include <array>
+#include <cmath>
+#include <glm/gtc/quaternion.hpp>
+#include <map>
 #include <memory>
 #include <sstream>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "Core/API/Texture.h"
 #include "Core/API/Vao.h"
+#include "Core/Color.h"
 #include "Core/Error.h"
 #include "Utils/Gui.h"
 #include "Utils/Logger.h"
 #include "Utils/Timer.h"
-#include "glm/gtc/quaternion.hpp"
 
 namespace Rastery {
 
@@ -141,6 +148,7 @@ tbb::concurrent_vector<TrianglePrimitive> RasterPipeline::executeVertexShader(co
         primitive.v0 = vertexResult[vIndex + 0];
         primitive.v1 = vertexResult[vIndex + 1];
         primitive.v2 = vertexResult[vIndex + 2];
+        primitive.id = uint32_t(index);
 
         if (!cullFunc(isClockwise(primitive))) {
             return;
@@ -192,6 +200,37 @@ bool RasterPipeline::zbufferTest(float2 sample, float depth) {
     return passed;
 }
 
+void RasterPipeline::rasterizePoint(int2 pixel, std::span<const float2, 3> viewportCrds, const TrianglePrimitive& primitive,
+                                    FragmentShader fragmentShader, RasterizerDebugData* pDebugData) {
+    int width = mDesc.width;
+    int height = mDesc.height;
+
+    if (any(glm::lessThan(pixel, int2(0))) || any(glm::greaterThanEqual(pixel, int2(width, height)))) return;
+
+    float2 samplePoint = float2(pixel) + float2(0.5);
+    float3 baryCoord = computeBarycentricCoordinate(viewportCrds[0], viewportCrds[1], viewportCrds[2], samplePoint);
+
+    if (!isInsidePrimitive(baryCoord)) return;
+
+    // Interpolated fragment data in clip space
+    // FIXME interpolate in linear space
+    VertexOut interpolateVertex = primitive.v0 * baryCoord.x + primitive.v1 * baryCoord.y + primitive.v2 * baryCoord.z;
+    interpolateVertex.rasterPosition = float4(clipToNDC(interpolateVertex.rasterPosition), interpolateVertex.rasterPosition.w);
+
+    if (interpolateVertex.rasterPosition.z <= 0 || interpolateVertex.rasterPosition.z > 1 ||
+        !zbufferTest(samplePoint, interpolateVertex.rasterPosition.z)) {
+        return;
+    }
+
+    // Prepare fragment and context data
+    FragIn fragIn = interpolateVertex;
+    GraphicsContextData context(primitive.id, samplePoint);
+    if (pDebugData) {
+        context.debugData = *pDebugData;
+    }
+    mpColorTexture->fetch<float4>(pixel) = fragmentShader(fragIn, context);
+}
+
 void RasterPipeline::executeRasterization(const tbb::concurrent_vector<TrianglePrimitive>& primitives, FragmentShader fragmentShader) {
     Timer timer;
 
@@ -205,54 +244,25 @@ void RasterPipeline::executeRasterization(const tbb::concurrent_vector<TriangleP
             vpCrd[1] = ndcToViewport(width, height, clipToNDC(primitive.v1.rasterPosition));
             vpCrd[2] = ndcToViewport(width, height, clipToNDC(primitive.v2.rasterPosition));
 
-            auto rasterizePoint = [&](int2 pixel) {
-                if (any(glm::lessThan(pixel, int2(0))) || any(glm::greaterThanEqual(pixel, int2(width, height)))) return;
-
-                float2 samplePoint = float2(pixel) + float2(0.5);
-                float3 baryCoord = computeBarycentricCoordinate(vpCrd[0], vpCrd[1], vpCrd[2], samplePoint);
-                if (!isInsidePrimitive(baryCoord)) return;
-
-                // Interpolated fragment data in clip space
-                // FIXME interpolate in linear space
-                VertexOut interpolateVertex = primitive.v0 * baryCoord.x + primitive.v1 * baryCoord.y + primitive.v2 * baryCoord.z;
-                interpolateVertex.rasterPosition = float4(clipToNDC(interpolateVertex.rasterPosition), interpolateVertex.rasterPosition.w);
-
-                if (interpolateVertex.rasterPosition.z <= 0 || interpolateVertex.rasterPosition.z > 1 ||
-                    !zbufferTest(samplePoint, interpolateVertex.rasterPosition.z)) {
-                    return;
-                }
-
-                FragIn fragIn = interpolateVertex;
-                mpColorTexture->fetch<float4>(pixel) = fragmentShader(fragIn);
-            };
-
             switch (mDesc.rasterMode) {
                 case RasterMode::Naive: {
                     tbb::parallel_for(tbb::blocked_range2d<int>(0, height, 0, width), [&](tbb::blocked_range2d<int> r) {
                         for (int y = r.rows().begin(), y_end = r.rows().end(); y < y_end; y++) {
                             for (int x = r.cols().begin(), x_end = r.cols().end(); x < x_end; x++) {
-                                rasterizePoint(int2(x, y));
+                                rasterizePoint(int2(x, y), vpCrd, primitive, fragmentShader);
                             }
                         }
                     });
 
                 } break;
                 case RasterMode::BoundedNaive: {
+                    // Create a copy of vpCrd for sorting
                     std::array<float2, 3> v = vpCrd;
                     // bubble sort vertices by y
-                    if (v[0].y > v[1].y) {
-                        std::swap(v[0], v[1]);
-                    }
-                    if (v[1].y > v[2].y) {
-                        std::swap(v[1], v[2]);
-                    }
-                    if (v[0].y > v[1].y) {
-                        std::swap(v[0], v[1]);
-                    }
+                    sort3(v[0], v[1], v[2], [](const float2& v1, const float2& v2) { return v1.y < v2.y; });
 
                     float triangleHeight = v[2].y - v[0].y;
                     float upperHeight = v[1].y - v[0].y;
-                    float lowerHeight = v[2].y - v[1].y;
                     float2 vMid = lerp(v[0], v[2], upperHeight / triangleHeight);
                     // Ensure vMid on the right side
                     if (vMid.x < v[1].x) std::swap(vMid, v[1]);
@@ -277,7 +287,7 @@ void RasterPipeline::executeRasterization(const tbb::concurrent_vector<TriangleP
                         auto xRight = (int)std::ceil(std::max((y - vMid.y) / (v[0].y - vMid.y) * (v[0].x - vMid.x) + vMid.x,
                                                               (y + 1.f - vMid.y) / (v[0].y - vMid.y) * (v[0].x - vMid.x) + vMid.x));
                         for (int x = xLeft; x <= xRight; x++) {
-                            rasterizePoint(int2(x, y));
+                            rasterizePoint(int2(x, y), vpCrd, primitive, fragmentShader);
                         }
                     });
 
@@ -291,7 +301,7 @@ void RasterPipeline::executeRasterization(const tbb::concurrent_vector<TriangleP
                                                               (y + 1.f - v[2].y) / (vMid.y - v[2].y) * (vMid.x - v[2].x) + v[2].x));
 
                         for (int x = xLeft; x <= xRight; x++) {
-                            rasterizePoint(int2(x, y));
+                            rasterizePoint(int2(x, y), vpCrd, primitive, fragmentShader);
                         }
                     });
 
@@ -301,12 +311,186 @@ void RasterPipeline::executeRasterization(const tbb::concurrent_vector<TriangleP
                 };
             }
         }
-    } else {
+    } else if (mDesc.rasterMode == RasterMode::ScanLineZBuffer) {
+        scanlineZBuffer(primitives, fragmentShader);
     }
+
     timer.end();
     mStats.drawCallCount++;
     mStats.triangleCount += (uint32_t)primitives.size();
     mStats.rasterizeTime += timer.elapsedMilliseconds();
+}
+
+struct PrimitiveItem {
+    const TrianglePrimitive* pPrimitive;
+    std::array<float2, 3> vpCrd;  ///< view port coordinates for barycentric coordinate compute
+    int dy;
+};
+
+using ClassifiedPrimitiveTable = std::vector<std::vector<PrimitiveItem>>;
+using ClassifiedEdgeTable = std::vector<std::unordered_map<const TrianglePrimitive*, std::vector<EdgeItem>>>;
+
+struct ActiveEdgePairItem {
+    std::pair<EdgeItem, EdgeItem> edgePair;
+    float depth;
+};
+
+using ActivePrimitiveTable = std::vector<PrimitiveItem>;
+using ActiveEdgePairTable = std::unordered_map<const TrianglePrimitive*, ActiveEdgePairItem>;
+
+static bool prepareEdgeItem(const TrianglePrimitive& primitive, const float2& p0, const float2& p1, int width, int height,
+                            ClassifiedEdgeTable& table) {
+    EdgeItem item;
+    item.pPrimitive = &primitive;
+    item.x = p0.x;
+    float k = (p1.y - p0.y) / (p1.x - p0.x);
+    item.dx = 1.f / k;
+    if (std::isinf(item.dx)) {
+        item.dx = 0.0;
+    }
+    item.dy = std::ceil(p1.y) - std::floor(p0.y);
+    int y = std::floor(p0.y);
+    if (y >= height) {
+        return false;
+    }
+
+    if (y < 0) {
+        // clip y
+        item.x += -y * item.dx;
+        item.dy += y;
+        y = 0;
+    }
+    item.x -= (p0.y - std::floor(p0.y)) * item.dx;
+    item.x0 = item.x;
+    table[y][&primitive].push_back(item);
+    return true;
+}
+
+void RasterPipeline::scanlineZBuffer(const tbb::concurrent_vector<TrianglePrimitive>& primitives, FragmentShader fragmentShader) {
+    int width = mDesc.width;
+    int height = mDesc.height;
+
+    ClassifiedPrimitiveTable cpt(height, {});
+    ClassifiedEdgeTable cet(height, {});
+    // 1. Build classified polygon&edge table
+    for (const TrianglePrimitive& primitive : primitives) {
+        std::array<float2, 3> vpCrd;
+        vpCrd[0] = ndcToViewport(width, height, clipToNDC(primitive.v0.rasterPosition));
+        vpCrd[1] = ndcToViewport(width, height, clipToNDC(primitive.v1.rasterPosition));
+        vpCrd[2] = ndcToViewport(width, height, clipToNDC(primitive.v2.rasterPosition));
+        PrimitiveItem item;
+        item.vpCrd = vpCrd;
+        // bubble sort vertices by y
+        sort3(vpCrd[0], vpCrd[1], vpCrd[2], [](const float2& v1, const float2& v2) { return v1.y < v2.y; });
+
+        int minY = std::floor(vpCrd[0].y);
+        minY = std::max(0, minY);
+        int maxY = std::ceil(vpCrd[2].y);
+        if (minY < height && maxY >= 0) {
+            // Update classified polygon table
+            item.pPrimitive = &primitive;
+            item.dy = maxY - minY;
+            cpt[minY].push_back(item);
+
+            // Update classified edge table
+            prepareEdgeItem(primitive, vpCrd[0], vpCrd[1], width, height, cet);
+            prepareEdgeItem(primitive, vpCrd[0], vpCrd[2], width, height, cet);
+            prepareEdgeItem(primitive, vpCrd[1], vpCrd[2], width, height, cet);
+        }
+    }
+
+    // 2. Do scanline rasterization
+    ActivePrimitiveTable activePrims;
+    ActiveEdgePairTable activeEdgePairs;
+    for (int y = 0; y < height; y++) {
+        // Update active table
+        const auto& primTable = cpt[y];
+        auto& edgeTable = cet[y];
+
+        for (const auto& prim : primTable) {
+            const auto* pId = prim.pPrimitive;
+            if (edgeTable.find(pId) == edgeTable.end()) {
+                logFatal("Can't find edge of primitive!");
+            }
+
+            auto& edgePair = edgeTable.at(prim.pPrimitive);
+            if (edgePair.size() == 1 || edgePair.size() == 0) {
+                logFatal("Invalid edge pair size = {}", edgePair.size());
+            }
+
+            activePrims.push_back(prim);
+
+            auto addEdgePair = [&](EdgeItem it0, EdgeItem it1) {
+                ActiveEdgePairItem activeEdgePair;
+                if (it0.x > it1.x || (it0.x == it1.x && (it0.dy > it1.dy))) {
+                    std::swap(it0, it1);
+                }
+                activeEdgePair.edgePair = {it0, it1};
+
+                activeEdgePairs[pId] = activeEdgePair;
+            };
+
+            if (edgePair.size() == 3) {
+                // 3 edges starts at the same place
+                // Put in the tallest and shortest ones
+                sort3(edgePair[0], edgePair[1], edgePair[2], [](const EdgeItem& it0, const EdgeItem& it1) { return it0.dy < it1.dy; });
+                addEdgePair(edgePair[0], edgePair[2]);
+            } else {
+                addEdgePair(edgePair[0], edgePair[1]);
+            }
+        }
+
+        ActivePrimitiveTable activePrimsNew;
+        activePrimsNew.reserve(activePrims.size());
+
+        for (auto& activePrim : activePrims) {
+            const auto* pId = activePrim.pPrimitive;
+            auto aepIt = activeEdgePairs.find(pId);
+            if (aepIt == activeEdgePairs.end()) {
+                logFatal("Can't find edge pair of primitive!");
+            }
+            auto& activeEdgePair = aepIt->second;
+            auto& [edge0, edge1] = activeEdgePair.edgePair;
+
+            if (edge0.x > edge1.x) {
+                std::swap(edge0, edge1);
+            }
+            int upperX0 = std::floor(edge0.x), upperX1 = std::ceil(edge1.x);
+            int lowerX0 = std::floor(edge0.x + edge0.dx), lowerX1 = std::ceil(edge1.x + edge1.dx);
+
+            int xLeft = std::min<int>({upperX0, lowerX0, upperX1, lowerX1});
+            int xRight = std::max<int>({upperX0, lowerX0, upperX1, lowerX1});
+            // Rasterize point
+            auto debugData = RasterizerDebugData();
+            debugData.activeEdgePair[0] = edge0;
+            debugData.activeEdgePair[1] = edge1;
+            for (int x = xLeft; x <= xRight; x++) {
+                int2 pixel = int2(x, y);
+                // mpColorTexture->fetch<float4>(pixel) = float4(pseudoColor(pId->id), 1);
+
+                rasterizePoint(pixel, activePrim.vpCrd, *pId, fragmentShader, &debugData);
+            }
+            edge0.x += edge0.dx;
+            edge1.x += edge1.dx;
+            int dyLeft = --edge0.dy;
+            int dyRight = --edge1.dy;
+
+            activePrim.dy--;
+            if (activePrim.dy <= 0) {
+                activeEdgePairs.erase(aepIt);
+            } else {
+                activePrimsNew.push_back(activePrim);
+                auto cetIt = cet[y].find(pId);
+                if ((dyLeft <= 0 || dyRight <= 0) && cetIt != cet[y].end() && !cetIt->second.empty()) {
+                    // Find a new edge to replace it
+                    EdgeItem newEdge = cetIt->second[cetIt->second.size() == 3 ? 1 : 0];
+                    std::swap(dyLeft <= 0 ? edge0 : edge1, newEdge);
+                }
+            }
+        }
+        activePrimsNew.shrink_to_fit();
+        std::swap(activePrimsNew, activePrims);
+    }
 }
 
 }  // namespace Rastery

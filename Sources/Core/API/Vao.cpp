@@ -7,6 +7,14 @@
 
 #include "Utils/Logger.h"
 namespace Rastery {
+CpuVao::SharedPtr CpuVao::createTriangle() {
+    CpuVao::SharedPtr pVao = std::make_shared<CpuVao>();
+    pVao->vertexData = {Vertex{.position = float3(1, 1, 0), .normal{}, .texCoord{}},
+                        Vertex{.position = float3(-1, 1, 0), .normal{}, .texCoord{}},
+                        Vertex{.position = float3(0, 0, 0), .normal{}, .texCoord{}}};
+    return pVao;
+}
+
 CpuVao::SharedPtr createFromFile(const std::filesystem::path& p) {
     Assimp::Importer importer;
 

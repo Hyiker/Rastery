@@ -8,6 +8,7 @@ add_executable(Rastery
     Core/App.cpp
     Core/Camera.cpp
     Core/CameraController.cpp
+    Core/Color.cpp
     Core/Error.cpp
     Core/Rastery.cpp
     Core/Math.cpp
