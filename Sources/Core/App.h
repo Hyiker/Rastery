@@ -61,7 +61,7 @@ class RASTERY_API App : public ICallback {
         CpuTexture::SharedPtr mpColorTexture;
         RasterPipeline::SharedPtr mpPipeline;
     } mRasterizer;
-
+    BVH::SharedPtr mpBVH;
     Window::SharedPtr mpWindow;
 
     // Params

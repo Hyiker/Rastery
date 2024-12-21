@@ -4,6 +4,7 @@
 #include <assimp/scene.h>
 
 #include <assimp/Importer.hpp>
+#include <numeric>
 
 #include "Utils/Logger.h"
 namespace Rastery {
@@ -12,7 +13,16 @@ CpuVao::SharedPtr CpuVao::createTriangle() {
     pVao->vertexData = {Vertex{.position = float3(1, 1, 0), .normal{}, .texCoord{}},
                         Vertex{.position = float3(-1, 1, 0), .normal{}, .texCoord{}},
                         Vertex{.position = float3(0, 0, 0), .normal{}, .texCoord{}}};
+    pVao->finalize();
     return pVao;
+}
+
+void CpuVao::finalize() {
+    if (indexData.empty()) {
+        // Generate index data
+        indexData.resize(vertexData.size());
+        std::iota(indexData.begin(), indexData.end(), 0);
+    }
 }
 
 CpuVao::SharedPtr createFromFile(const std::filesystem::path& p) {
@@ -55,7 +65,7 @@ CpuVao::SharedPtr createFromFile(const std::filesystem::path& p) {
 
         vertexOffset += mesh->mNumVertices;
     }
-
+    pVao->finalize();
     return pVao;
 }
 }  // namespace Rastery

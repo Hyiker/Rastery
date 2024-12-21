@@ -19,6 +19,8 @@ struct RASTERY_API CpuVao {
     std::vector<uint32_t> indexData;
 
     static CpuVao::SharedPtr createTriangle();
+
+    void finalize();
 };
 
 // TODO move the importer part to Utils/Importer.h

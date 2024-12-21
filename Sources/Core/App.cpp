@@ -94,6 +94,8 @@ App::App() {
     handleFrameBufferResize(desc.width, desc.height);
 
     mpModelVao = CpuVao::createTriangle();
+    mpBVH = std::make_shared<BVH>();
+    mpBVH->build(mpModelVao);
 }
 
 void App::run() const { mpWindow->beginLoop(); }
@@ -215,7 +217,7 @@ void App::executeRasterizer() {
 
     mRasterizer.mpPipeline->beginFrame();
 
-    mRasterizer.mpPipeline->draw(*mpModelVao, vertexShader, fragShader);
+    mRasterizer.mpPipeline->draw(*mpModelVao, *mpBVH, vertexShader, fragShader);
 }
 
 void App::blitFrameBuffer() const {
@@ -242,9 +244,14 @@ void App::blitFrameBuffer() const {
 
 void App::import(const std::filesystem::path& p) {
     mpModelVao = createFromFile(p);
+
+    mpBVH->reset();
+    mpBVH->build(mpModelVao);
+
     if (!mpModelVao) {
         logError("Bad model file");
     }
+
     logInfo("Imported model from {}", p.string());
 
     if ((mpModelVao->indexData.size() > 1000 || mpModelVao->vertexData.size() > 1000) &&

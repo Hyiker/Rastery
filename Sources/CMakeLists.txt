@@ -1,4 +1,5 @@
 add_executable(Rastery
+    Core/API/BVH.cpp
     Core/API/Texture.cpp
     Core/API/Shader.cpp
     Core/API/Vao.cpp

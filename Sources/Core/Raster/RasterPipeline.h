@@ -4,10 +4,12 @@
 #include <functional>
 #include <memory>
 
+#include "Core/API/BVH.h"
 #include "Core/API/Texture.h"
 #include "Core/API/Vao.h"
 #include "Core/Enum.h"
 #include "Core/Macros.h"
+
 namespace Rastery {
 
 /** Vertex/fragment attributes.
@@ -28,7 +30,7 @@ struct VertexOut {
 };
 
 struct TrianglePrimitive {
-    uint32_t id;
+    uint32_t id;  ///< primitive index, actually primitive index in Vao
     VertexOut v0;
     VertexOut v1;
     VertexOut v2;
@@ -130,18 +132,22 @@ class RASTERY_API RasterPipeline {
      * @param vao CPU vertex array object data
      * TODO: move shaders elsewhere
      */
-    void draw(const CpuVao& vao, VertexShader vertexShader, FragmentShader fragmentShader);
+    void draw(const CpuVao& vao, BVH& bvh, VertexShader vertexShader, FragmentShader fragmentShader);
 
     void renderUI();
 
-    bool useHiZ() const { return mDesc.useHierarchicalZBuffer && mDesc.rasterMode != RasterMode::ScanLineZBuffer; }
+    bool useHiZ() const;
+
+    bool useAccelerationStructure() const;
 
    private:
     Stats mStats;
 
     void renderStats() const;
 
-    bool earlyHiZBufferTest(std::span<const float3, 3> viewportCrd) const;
+    bool earlyHiZBufferTest(const AABB& vpBounds) const;
+    
+    bool earlyHiZBufferTest(const AABB& vpBounds, int layer) const;
 
     /** Down-top update hierarchical z-buffer pyramid in the range.
      */
@@ -153,16 +159,19 @@ class RASTERY_API RasterPipeline {
      */
     [[nodiscard]] tbb::concurrent_vector<TrianglePrimitive> executeVertexShader(const CpuVao& vao, VertexShader vertexShader) const;
 
+    void rasterizePrimitive(const TrianglePrimitive& primitive, FragmentShader fragmentShader);
+
     void rasterizePoint(int2 pixel, std::span<const float3, 3> viewportCrds, const TrianglePrimitive& primitive,
                         FragmentShader fragmentShader, RasterizerDebugData* pDebugData = nullptr);
 
-    void prepareRasterization();
+    void prepareRasterization(const tbb::concurrent_vector<TrianglePrimitive>& primitives, BVH& bvh);
 
-    void executeRasterization(const tbb::concurrent_vector<TrianglePrimitive>& primitives, FragmentShader fragmentShader);
+    void executeRasterization(const tbb::concurrent_vector<TrianglePrimitive>& primitives, BVH& bvh, FragmentShader fragmentShader);
 
     void scanlineZBuffer(const tbb::concurrent_vector<TrianglePrimitive>& primitives, FragmentShader fragmentShader);
 
     RasterDesc mDesc;
+
     std::vector<CpuTexture::SharedPtr> mHiZDepthTextures;
     CpuTexture::SharedPtr mpDepthTexture;
     CpuTexture::SharedPtr mpColorTexture;
