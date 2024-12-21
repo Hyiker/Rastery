@@ -33,31 +33,15 @@ static int recursiveBVHBuild(std::span<BVHLeafNode> nodes, std::vector<BVHNode>&
     BVHNode node;
     std::sort(nodes.begin(), nodes.end(),
               [depth](const BVHLeafNode& n0, const BVHLeafNode& n1) { return n0.aabb.center()[depth % 3] < n1.aabb.center()[depth % 3]; });
-
-    uint32_t nLeft = n >> 1;
-    uint32_t nRight = n - nLeft;
-
-    if (nLeft >= 1) {
-        node.left = recursiveBVHBuild(nodes.subspan(0, nLeft), target, depth + 1);
-        node.aabb |= target[node.left].aabb;
-        node.leafCnt += target[node.left].leafCnt;
-    }
-
-    if (nRight >= 1) {
-        node.right = recursiveBVHBuild(nodes.subspan(nLeft, nRight), target, depth + 1);
-        node.aabb |= target[node.right].aabb;
-        node.leafCnt += target[node.right].leafCnt;
+    const uint32_t kSliceSize = std::ceil(float(n) / BVHNode::kMaxChildrenCount);
+    for (uint32_t i = 0; i < nodes.size(); i += kSliceSize) {
+        int child = recursiveBVHBuild(nodes.subspan(i, std::min<int>(kSliceSize, nodes.size() - i)), target, depth + 1);
+        node.aabb |= target[child].aabb;
+        node.leafCnt += target[child].leafCnt;
+        node.children.push_back(child);
     }
 
     int index = target.size();
-    if (nLeft >= 1) {
-        target[node.left].father = index;
-    }
-
-    if (nRight >= 1) {
-        target[node.right].father = index;
-    }
-
     target.push_back(node);
     return index;
 }
@@ -70,7 +54,7 @@ BVHNode& BVH::getRootNode() { return mNodes.back(); }
 
 void BVH::build(const CpuVao::SharedPtr& pVao) {
     std::vector<BVHLeafNode> leaves(pVao->indexData.size() / 3);
-    logInfo("Start BVH build[{}]...", leaves.size());
+    logInfo("Start BVH build for {} leaves, {} children for each node...", leaves.size(), BVHNode::kMaxChildrenCount);
     for (int i = 0; i < leaves.size(); ++i) {
         leaves[i].vaoOffset = i;
         AABB aabb;
@@ -101,13 +85,19 @@ AABB recursiveUpdateViewportData(std::vector<BVHNode>& nodes, int nodeIndex) {
     if (node.isLeaf()) return node.viewportAABB;
     node.viewportAABB = AABB();
 
-    if (node.hasLeft()) {
-        node.viewportAABB |= recursiveUpdateViewportData(nodes, node.left);
+    for (int child : node.children) {
+        node.viewportAABB |= recursiveUpdateViewportData(nodes, child);
     }
 
-    if (node.hasRight()) {
-        node.viewportAABB |= recursiveUpdateViewportData(nodes, node.right);
-    }
+    std::sort(node.children.begin(), node.children.end(), [&](int a, int b) {
+        auto &n0 = nodes[a], n1 = nodes[b];
+        if (!n0.isCulledLastFrame) {
+            return true;
+        } else if (!n1.isCulledLastFrame) {
+            return false;
+        }
+        return n0.viewportAABB.minPoint.z < n1.viewportAABB.minPoint.z;
+    });
 
     return node.viewportAABB;
 }

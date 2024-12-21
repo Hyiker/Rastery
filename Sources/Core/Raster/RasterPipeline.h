@@ -111,11 +111,13 @@ struct RasterDesc {
 class RASTERY_API RasterPipeline {
    public:
     struct Stats {
-        uint32_t triangleCount = 0;  ///< Triangle primitive count.(after culling)
-        uint32_t drawCallCount = 0;  ///< Time of draw call count.
-        float rasterizeTime = 0;     ///< Rasterization time in ms.
+        uint32_t commitedPrimitiveCount = 0;            ///< Triangle primitive count.(after back/front facing cull)
+        uint32_t drawCallCount = 0;                     ///< Time of draw call count.
+        float fullRasterizeTime = 0;                    ///< Rasterization time in ms.
+        float accelerationTime = 0;                     ///< Time consumed by acceleration techniques.
+        std::atomic<float> primitiveRasterizeTime = 0;  ///< Time consumed by primitive rasterize.
 
-        uint32_t hiZCullCount = 0;
+        uint32_t hiZCullCount = 0;  ///< Hi-Z culled primitive count(may overlap with back/front face cull)
     };
 
     using SharedPtr = std::shared_ptr<RasterPipeline>;
@@ -146,7 +148,7 @@ class RASTERY_API RasterPipeline {
     void renderStats() const;
 
     bool earlyHiZBufferTest(const AABB& vpBounds) const;
-    
+
     bool earlyHiZBufferTest(const AABB& vpBounds, int layer) const;
 
     /** Down-top update hierarchical z-buffer pyramid in the range.

@@ -11,20 +11,19 @@
 namespace Rastery {
 
 struct RASTERY_API BVHNode {
-    int left = -1;        ///< Index into left node
-    int right = -1;       ///< Index into right node
-    int father = -1;      ///<
-    int primOffset = -1;  ///< Primitive offset, set after vertex shader
-    int vaoOffset = -1;   ///< VAO offset into index buffer, divided by 3
+    static constexpr int kMaxChildrenCount = 4;
+    std::vector<int> children;  ///< Index into children node
+    int primOffset = -1;        ///< Primitive offset, set after vertex shader
+    int vaoOffset = -1;         ///< Leaf VAO offset into index buffer, divided by 3
     int leafCnt = 0;
 
-    AABB aabb;          ///< AABB in world space, update only when object moved
-    AABB viewportAABB;  ///< view port(screen space aabb)
+    AABB aabb;                       ///< AABB in world space, update only when object moved
+    AABB viewportAABB;               ///< view port(screen space aabb)
+    bool isCulledLastFrame = false;  /// Is this node culled last frame
 
     bool isLeaf() const { return vaoOffset != -1; }
     bool isPrimitiveValid() const { return primOffset != -1; }
-    bool hasLeft() const { return left != -1; }
-    bool hasRight() const { return right != -1; }
+    bool hasChildren() const { return !children.empty(); }
 };
 
 class RASTERY_API BVH {
@@ -40,6 +39,7 @@ class RASTERY_API BVH {
     BVHNode& getLeafNodeByVaoOffset(int index);
 
     const BVHNode& getNode(int index) const { return mNodes[index]; }
+    BVHNode& getNode(int index) { return mNodes[index]; }
 
     void updateViewportData();
 

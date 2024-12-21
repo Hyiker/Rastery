@@ -64,9 +64,11 @@ RasterPipeline::RasterPipeline(const RasterDesc& desc, const CpuTexture::SharedP
 
 void RasterPipeline::beginFrame() {
     // Clear stats
+    mStats.commitedPrimitiveCount = 0;
     mStats.drawCallCount = 0;
-    mStats.triangleCount = 0;
-    mStats.rasterizeTime = 0.f;
+    mStats.accelerationTime = 0.f;
+    mStats.primitiveRasterizeTime = 0.f;
+    mStats.fullRasterizeTime = 0.f;
     mStats.hiZCullCount = 0u;
 }
 
@@ -101,8 +103,10 @@ void RasterPipeline::renderStats() const {
     std::stringstream ss;
 
     ss << "Statistics:\n"
-       << fmt::format("Rasterize time: {:.2f}ms\n", mStats.rasterizeTime) << "Draw call count: " << mStats.drawCallCount
-       << "\nTriangle count: " << mStats.triangleCount << "\nHiZ cull count: " << mStats.hiZCullCount;
+       << fmt::format("Overall raster time: {:.2f}ms\n", mStats.fullRasterizeTime)
+       << fmt::format("Primitive raster time: {:.2f}ms\n", mStats.primitiveRasterizeTime.load())
+       << fmt::format("Acceleration related time: {:.2f}ms\n", mStats.accelerationTime) << "Draw call count: " << mStats.drawCallCount
+       << "\nCommited primitive count: " << mStats.commitedPrimitiveCount << "\nHiZ cull count: " << mStats.hiZCullCount;
 
     ImGui::Text("%s", ss.str().c_str());
 }
@@ -389,11 +393,16 @@ void RasterPipeline::rasterizePoint(int2 pixel, std::span<const float3, 3> viewp
     int height = mDesc.height;
 
     if (any(glm::lessThan(pixel, int2(0))) || any(glm::greaterThanEqual(pixel, int2(width, height)))) return;
+    Timer rasterTimer;
 
     float2 samplePoint = float2(pixel) + float2(0.5);
     float3 baryCoord = computeBarycentricCoordinate(viewportCrds[0], viewportCrds[1], viewportCrds[2], samplePoint);
 
-    if (!isInsidePrimitive(baryCoord)) return;
+    if (!isInsidePrimitive(baryCoord)) {
+        rasterTimer.end();
+        mStats.primitiveRasterizeTime += rasterTimer.elapsedMilliseconds();
+        return;
+    }
 
     // Interpolated fragment data in clip space
     // FIXME interpolate in linear space
@@ -402,6 +411,8 @@ void RasterPipeline::rasterizePoint(int2 pixel, std::span<const float3, 3> viewp
 
     if (interpolateVertex.rasterPosition.z <= 0 || interpolateVertex.rasterPosition.z > 1 ||
         !zBufferTest(samplePoint, interpolateVertex.rasterPosition.z)) {
+        rasterTimer.end();
+        mStats.primitiveRasterizeTime += rasterTimer.elapsedMilliseconds();
         return;
     }
 
@@ -412,6 +423,8 @@ void RasterPipeline::rasterizePoint(int2 pixel, std::span<const float3, 3> viewp
         context.debugData = *pDebugData;
     }
     mpColorTexture->fetch<float4>(pixel) = fragmentShader(fragIn, context);
+    rasterTimer.end();
+    mStats.primitiveRasterizeTime += rasterTimer.elapsedMilliseconds();
 }
 
 static AABB computePrimitiveViewportAABB(const TrianglePrimitive& primitive, int width, int height) {
@@ -498,11 +511,12 @@ void RasterPipeline::executeRasterization(const tbb::concurrent_vector<TriangleP
     // Cull the pixels in screen space
     if (mDesc.rasterMode == RasterMode::Naive || mDesc.rasterMode == RasterMode::BoundedNaive) {
         if (useHiZ() && useAccelerationStructure()) {
-            std::queue<const BVHNode*> q;
-            q.push(&bvh.getRootNode());
-            while (!q.empty()) {
-                const auto* node = q.front();
-                q.pop();
+            std::vector<BVHNode*> stack;
+            stack.reserve(primitives.size());
+            stack.push_back(&bvh.getRootNode());
+            while (!stack.empty()) {
+                auto* node = stack.back();
+                stack.pop_back();
 
                 const AABB& vpAABB = node->viewportAABB;
                 // Choose a layer that texel size is nearly the same or larger than tha vpAABB
@@ -510,18 +524,17 @@ void RasterPipeline::executeRasterization(const tbb::concurrent_vector<TriangleP
 
                 if (!earlyHiZBufferTest(vpAABB, layer)) {
                     mStats.hiZCullCount += node->leafCnt;
+                    node->isCulledLastFrame = true;
                     continue;
                 }
+                node->isCulledLastFrame = false;
                 if (node->isLeaf() && node->isPrimitiveValid() && node->primOffset < primitives.size()) {
                     rasterizePrimitive(primitives[node->primOffset], fragmentShader);
                     continue;
                 }
-                if (node->hasLeft()) {
-                    q.push(&bvh.getNode(node->left));
-                }
-                if (node->hasRight()) {
-                    q.push(&bvh.getNode(node->right));
-                }
+
+                // Push child into stack reversed order
+                std::for_each(node->children.rbegin(), node->children.rend(), [&](int child) { stack.push_back(&bvh.getNode(child)); });
             }
         } else {
             for (const auto& primitive : primitives) {
@@ -540,8 +553,9 @@ void RasterPipeline::executeRasterization(const tbb::concurrent_vector<TriangleP
 
     timer.end();
     mStats.drawCallCount++;
-    mStats.triangleCount += (uint32_t)primitives.size();
-    mStats.rasterizeTime += timer.elapsedMilliseconds();
+    mStats.commitedPrimitiveCount += (uint32_t)primitives.size();
+    mStats.fullRasterizeTime += timer.elapsedMilliseconds();
+    mStats.accelerationTime += mStats.fullRasterizeTime - mStats.primitiveRasterizeTime;
 }
 
 struct PrimitiveItem {
@@ -595,6 +609,7 @@ void RasterPipeline::scanlineZBuffer(const tbb::concurrent_vector<TrianglePrimit
 
     ClassifiedPrimitiveTable cpt(height, {});
     ClassifiedEdgeTable cet(height, {});
+
     // 1. Build classified polygon&edge table
     for (const TrianglePrimitive& primitive : primitives) {
         std::array<float3, 3> vpCrd;
