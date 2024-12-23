@@ -69,7 +69,7 @@ void RasterPipeline::beginFrame() {
     mStats.accelerationTime = 0.f;
     mStats.primitiveRasterizeTime = 0.f;
     mStats.fullRasterizeTime = 0.f;
-    mStats.hiZCullCount = 0u;
+    mStats.actualDrawCount = 0u;
 }
 
 void RasterPipeline::draw(const CpuVao& vao, BVH& bvh, VertexShader vertexShader, FragmentShader fragmentShader) {
@@ -106,7 +106,7 @@ void RasterPipeline::renderStats() const {
        << fmt::format("Overall raster time: {:.2f}ms\n", mStats.fullRasterizeTime)
        << fmt::format("Primitive raster time: {:.2f}ms\n", mStats.primitiveRasterizeTime.load())
        << fmt::format("Acceleration related time: {:.2f}ms\n", mStats.accelerationTime) << "Draw call count: " << mStats.drawCallCount
-       << "\nCommited primitive count: " << mStats.commitedPrimitiveCount << "\nHiZ cull count: " << mStats.hiZCullCount;
+       << "\nCommited primitive count: " << mStats.commitedPrimitiveCount << "\nActually draw count: " << mStats.actualDrawCount.load();
 
     ImGui::Text("%s", ss.str().c_str());
 }
@@ -307,6 +307,7 @@ void RasterPipeline::rasterizePrimitive(const TrianglePrimitive& primitive, Frag
     vpCrd[0] = ndcToViewport(width, height, clipToNDC(primitive.v0.rasterPosition));
     vpCrd[1] = ndcToViewport(width, height, clipToNDC(primitive.v1.rasterPosition));
     vpCrd[2] = ndcToViewport(width, height, clipToNDC(primitive.v2.rasterPosition));
+    mStats.actualDrawCount++;
 
     switch (mDesc.rasterMode) {
         case RasterMode::Naive: {
@@ -478,6 +479,9 @@ void RasterPipeline::prepareRasterization(const tbb::concurrent_vector<TriangleP
     if (useAccelerationStructure()) {
         int width = mDesc.width;
         int height = mDesc.height;
+        for (int i = 0; i < bvh.getNodeCount(); i++) {
+            bvh.getNode(i).primOffset = -1;
+        }
         // Update bvh leaf nodes
         for (int i = 0; i < primitives.size(); i++) {
             const auto& prim = primitives[i];
@@ -523,7 +527,6 @@ void RasterPipeline::executeRasterization(const tbb::concurrent_vector<TriangleP
                 int layer = approxLayerIndex(vpAABB, mDesc.width, mDesc.height, mHiZDepthTextures.size());
 
                 if (!earlyHiZBufferTest(vpAABB, layer)) {
-                    mStats.hiZCullCount += node->leafCnt;
                     node->isCulledLastFrame = true;
                     continue;
                 }
@@ -541,7 +544,6 @@ void RasterPipeline::executeRasterization(const tbb::concurrent_vector<TriangleP
                 int width = mDesc.width;
                 int height = mDesc.height;
                 if (useHiZ() && !earlyHiZBufferTest(computePrimitiveViewportAABB(primitive, width, height))) {
-                    mStats.hiZCullCount++;
                     continue;
                 }
                 rasterizePrimitive(primitive, fragmentShader);
@@ -606,6 +608,7 @@ static bool prepareEdgeItem(const TrianglePrimitive& primitive, const float2& p0
 void RasterPipeline::scanlineZBuffer(const tbb::concurrent_vector<TrianglePrimitive>& primitives, FragmentShader fragmentShader) {
     int width = mDesc.width;
     int height = mDesc.height;
+    mStats.actualDrawCount++;
 
     ClassifiedPrimitiveTable cpt(height, {});
     ClassifiedEdgeTable cet(height, {});

@@ -1,6 +1,7 @@
 #pragma once
 #include <tbb/concurrent_vector.h>
 
+#include <atomic>
 #include <functional>
 #include <memory>
 
@@ -117,7 +118,7 @@ class RASTERY_API RasterPipeline {
         float accelerationTime = 0;                     ///< Time consumed by acceleration techniques.
         std::atomic<float> primitiveRasterizeTime = 0;  ///< Time consumed by primitive rasterize.
 
-        uint32_t hiZCullCount = 0;  ///< Hi-Z culled primitive count(may overlap with back/front face cull)
+        std::atomic_uint32_t actualDrawCount = 0u;  ///< The actually draw primitive count
     };
 
     using SharedPtr = std::shared_ptr<RasterPipeline>;

@@ -41,6 +41,8 @@ class RASTERY_API BVH {
     const BVHNode& getNode(int index) const { return mNodes[index]; }
     BVHNode& getNode(int index) { return mNodes[index]; }
 
+    int getNodeCount() const { return mNodes.size(); }
+
     void updateViewportData();
 
     void reset();
