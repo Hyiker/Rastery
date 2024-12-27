@@ -176,7 +176,7 @@ void App::executeRasterizer() {
     auto modelMatrix = float4x4(1.f);
     auto normalMatrix = transpose(inverse(modelMatrix));
 
-    auto vertexShader = [&](Vertex v) {
+    auto vertexShader = [data, modelMatrix, normalMatrix](Vertex v) {
         VertexOut out;
         out.rasterPosition = data.projViewMat * modelMatrix * float4(v.position, 1.f);
         out.position = modelMatrix * float4(v.position, 1.f);
@@ -189,7 +189,7 @@ void App::executeRasterizer() {
 
     switch (mVisualizeMode) {
         case VisualizeMode::Depth: {
-            fragShader = [&](FragIn fragIn, const GraphicsContextData& context) {
+            fragShader = [data](FragIn fragIn, const GraphicsContextData& context) {
                 float depth = fragIn.rasterPosition.z;
                 float linearDepth = data.nearZ * data.farZ / (data.farZ + depth * (data.nearZ - data.farZ));
                 return float4(float3(linearDepth), 1.f);
@@ -205,8 +205,9 @@ void App::executeRasterizer() {
         } break;
 
         case VisualizeMode::PseudoPrimitiveColor: {
-            fragShader = [&](FragIn fragIn, const GraphicsContextData& context) {
-                if (mSelectedPixel == int2(context.sampleCrd)) {
+            auto select = mSelectedPixel;
+            fragShader = [&, select](FragIn fragIn, const GraphicsContextData& context) {
+                if (select == int2(context.sampleCrd)) {
                     mRasterizerDebugData = context.debugData;
                 }
 
